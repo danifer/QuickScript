@@ -1,0 +1,64 @@
+#!/bin/bash
+
+SUBJECT="${SUBJECT:-""}"
+TO="${TO:-""}"
+CC="${CC:-""}"
+BCC="${BCC:-""}"
+FROM_EMAIL="${FROM_EMAIL:-""}"
+FROM_NAME="${FROM_NAME:-""}"
+ATTACHMENTS="${ATTACHMENTS:-""}"
+
+emailCmd="mutt"
+
+if [ -z "$TO" ]; then
+    echo "TO is empty. Exiting."
+    exit 1
+fi
+
+if
+    [ -n "${FROM_EMAIL}" ]
+  then
+    emailCmd+=" -e \"set from=$FROM_EMAIL\""
+
+fi
+
+if
+    [ -n "${FROM_NAME}" ]
+  then
+    emailCmd+=" -e \"set realname=$FROM_NAME\""
+
+fi
+
+if
+    [ -n "${SUBJECT}" ]
+  then
+    emailCmd+=" -s \"$SUBJECT\""
+fi
+
+IFS=$','
+for LINE in ${CC}
+do
+    emailCmd+=" -c \"$LINE\""
+done
+
+for LINE in ${BCC}
+do
+    emailCmd+=" -b \"$LINE\""
+done
+
+if
+    [ -n "${ATTACHMENTS}" ]
+  then
+    for LINE in ${ATTACHMENTS}
+    do
+        emailCmd+=" -a \"$LINE\""
+    done
+    emailCmd+=" -- "
+fi
+
+
+IFS=$'\n';
+emailCmd+=" $TO"
+
+eval "$emailCmd";
+exit 0;
