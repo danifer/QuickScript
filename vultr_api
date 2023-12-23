@@ -1,0 +1,41 @@
+#!/bin/bash
+
+if [ -z "$1" ]
+  then
+    echo "No API_KEY supplied."
+    exit;
+fi
+
+if [ -z "$2" ]
+  then
+    echo "No INSTANCE_ID supplied."
+    exit;
+fi
+
+VULTR_API_KEY=$1
+VULTR_INSTANCE_ID=$2
+
+VULTR_RESPONSE=$(
+
+  ## POST - Update ipv4 reverse DNS
+  # curl "https://api.vultr.com/v2/instances/${VULTR_INSTANCE_ID}/ipv4/reverse" \
+  #   -X POST \
+  #   -H "Authorization: Bearer ${VULTR_API_KEY}" \
+  #   -H "Content-Type: applicatiofn/json" \
+  #   --data '{
+  #     "ip" : "45.76.59.74",
+  #     "reverse" : "dfw7.danifer.com"
+  #   }'
+
+  ## GET - ipv4 data for specific instance
+  # curl "https://api.vultr.com/v2/instances/${VULTR_INSTANCE_ID}/ipv4" \
+  #   -X GET \
+  #   -H "Authorization: Bearer ${VULTR_API_KEY}"
+
+  ## GET - all instances
+  curl "https://api.vultr.com/v2/instances" \
+   -X GET \
+   -H "Authorization: Bearer ${VULTR_API_KEY}"
+ )
+
+echo $VULTR_RESPONSE | python -mjson.tool;

@@ -1,0 +1,31 @@
+#!/bin/sh
+
+if [ -z "$1" ]
+  then
+    echo "No database name supplied."
+    exit;
+fi
+
+if [ -z "$2" ]
+  then
+    echo "No owning username supplied."
+    exit;
+fi
+
+if [ -z "$3" ]
+  then
+    echo "No file path supplied."
+    exit;
+fi
+
+start_time=$SECONDS
+
+echo "Restoring $1."
+pg_restore -hlocalhost -d$1 -U$2 -npublic $3;
+
+sleep 2
+elapsed=$(( SECONDS - start_time ))
+echo $elapsed "seconds elapsed"
+
+# Beep
+echo -e '\a'

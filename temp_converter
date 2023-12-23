@@ -1,0 +1,46 @@
+#!/usr/bin/env php
+<?php
+
+$options = getopt('', [
+    'convertTo::',
+    'temperature::',
+    'toFahrenheit',
+    'toCelsius'
+]);
+
+$convertTo = 'toFahrenheit';
+if (isset($options['toCelsius'])) {
+    $convertTo = 'toCelsius';
+}
+
+$input = (float) ($options['temperature']  ?? 0);
+
+$stdIn = STDIN;
+stream_set_blocking($stdIn, false);
+$incomingData = stream_get_line($stdIn, 0);
+if (strlen($incomingData) > 0) {
+    $input = (float) $incomingData;
+}
+
+if($convertTo === 'toCelsius') {
+    echo fahrenheit_to_celsius($input);
+    exit(0);
+}
+
+if($convertTo === 'toFahrenheit') {
+    echo celsius_to_fahrenheit($input);
+    exit(0);
+}
+
+echo 'error';
+exit(1);
+
+function fahrenheit_to_celsius(float $temp): float
+{
+    return 5/9*($temp-32);
+}
+
+function celsius_to_fahrenheit(float $temp): float
+{
+    return $temp*9/5+32;
+}

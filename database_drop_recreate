@@ -1,0 +1,25 @@
+#!/bin/sh
+
+if [ -z "$1" ]
+  then
+    echo "No database name supplied."
+    exit;
+fi
+
+if [ -z "$2" ]
+  then
+    echo "No owning username supplied."
+    exit;
+fi
+
+start_time=$SECONDS
+
+echo "Dropping database $1.";
+dropdb $1 -hlocalhost -U$(whoami) --force --interactive;
+
+echo "Creating database $1."
+createdb -e -E 'UTF-8' -O $2 -hlocalhost $1;
+
+sleep 2
+elapsed=$(( SECONDS - start_time ))
+echo $elapsed "seconds elapsed"

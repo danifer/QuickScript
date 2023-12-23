@@ -1,0 +1,68 @@
+#!/usr/bin/env php
+<?php
+
+$options = getopt('', [
+    'from:',
+    'fromName:',
+    'to:',
+    'subject:',
+    'text:',
+]);
+
+$mandrillKey = 'key';
+$mandrillUrl = 'https://mandrillapp.com/api/1.0/messages/send';
+$defaultFromEmail = 'mail@example.com';
+
+$fromEmail = isset($options['from']) ? strtolower($options['from']) : $defaultFromEmail;
+$fromName = isset($options['fromName']) ? strtolower($options['fromName']) : $fromEmail;
+$toAddress = isset($options['to']) ? strtolower($options['to']) : null;
+$subject = isset($options['subject']) ? strtolower($options['subject']) : null;
+$text = isset($options['text']) ? strtolower($options['text']) : null;
+
+$toAddresses = explode(',', $toAddress);
+
+if (empty(array_filter($toAddresses))) {
+    echo("No recipient specified.\n");
+    exit(1);
+}
+
+foreach ($toAddresses as $address) {
+    $address = trim($address);
+
+    if ($address && !filter_var($address, FILTER_VALIDATE_EMAIL) ) {
+        echo("Invalid email address.\n");
+        exit(1);
+    }
+
+    $recipients[] = ['email' => $address];
+}
+
+// Send Email
+$message = json_encode([
+    'key' => $mandrillKey,
+    'message' => [
+        'text' => $text,
+        'subject' => $subject,
+        'from_email' => $fromEmail,
+        'from_name' => $fromName,
+        'to' => $recipients,
+        'preserve_recipients' => false,
+        'attachments' => []
+    ]
+]);
+
+$curl = curl_init($mandrillUrl);
+
+curl_setopt_array($curl, [
+    CURLOPT_POST => 1,
+    CURLOPT_SSL_VERIFYPEER => 0,
+    CURLOPT_SSL_VERIFYHOST => 0,
+    CURLOPT_RETURNTRANSFER => 1,
+    CURLOPT_POSTFIELDS => $message
+]);
+
+$response = curl_exec($curl);
+
+echo $response;
+
+exit(1);

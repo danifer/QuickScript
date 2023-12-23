@@ -1,0 +1,72 @@
+#!/bin/bash
+
+if [[ $1 == '-h' ]] || [[ $1 == '--help' ]]; then
+    echo "Merges and organizes files containing 'key=value' entries and outputs the results to stdout."
+    echo        
+    echo "Notes: Files are processed and prioritized in the order listed. Lowest priority is given to the first file and highest priority to the last."
+    echo
+    echo "Usage: merge-key-values [option] [file] [file] [...]"
+    echo
+    echo "Use Case: To write your output to a file, try something like this:"
+    echo 
+    echo "     MERGE_OUTPUT=\$(./merge-key-values [input_file1] [input_file2]);"
+    echo "     echo \$MERGE_OUTPUT > [output_file];"
+    echo "     unset MERGE_OUTPUT;"
+    echo
+    echo "Options:"
+    echo "  -h, --help    Show this help message and exit."
+    echo
+    exit
+fi
+
+files=""
+for a in "$@"
+do
+    if [ -f "$a" ]; then
+        files="${files} ${a}"
+    else
+        echo "File '${a}' does not exist."
+        exit 1
+    fi
+done
+
+
+function mergeKeyValues() {
+    awk '
+        BEGIN{
+            FS=OFS="="
+            split("", used)
+            split("", arr)
+        }
+        {
+            if (length($1) > 0) {
+                arr[$1]=$2
+            }
+        }
+        END {
+             for(item in arr) {
+                if(!(item in used) && (length(item) > 1) ) {
+
+                    print(item, arr[item])
+                }
+                used[item]=1
+             }
+        }' ${files} | sort | uniq | awk '
+            BEGIN {
+                lastprefix=""
+            }
+            {
+                if(lastprefix != substr($1,1,4)) {
+                    print("")
+                }
+
+                lastprefix = substr($1,1,4);
+            }
+            1
+        '
+}
+
+mergeKeyValues "$1"
+
+
+

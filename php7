@@ -1,0 +1,7 @@
+#!/bin/bash
+
+brew unlink php && brew unlink php@7.4;
+brew link --overwrite php@7.4 && brew link --force php@7.4;
+ln -f -s $(brew --prefix php@7.4)/bin/php /opt/current/php
+killall php-fpm
+brew services restart php@7.4

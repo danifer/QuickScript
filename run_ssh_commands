@@ -1,0 +1,14 @@
+#!/bin/bash
+SSH_HOST=$1
+SSH_PORT=$2
+IFS=';' read -ra COMMANDS_STR <<< "$3"
+
+COMMAND_STR="";
+for COMMAND in "${COMMANDS_STR[@]}"; do
+    # Trim whitespace from both the beginning and end of the string
+    COMMAND="${COMMAND#"${COMMAND%%[![:space:]]*}"}"
+    COMMAND="${COMMAND%"${COMMAND##*[![:space:]]}"}"
+    COMMAND_STR="$COMMAND_STR echo -e '$COMMAND:'; $COMMAND; echo '';"
+done
+
+echo "$(ssh -p $SSH_PORT $SSH_HOST $COMMAND_STR)";
