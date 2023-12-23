@@ -7,9 +7,10 @@ $options = getopt('', [
     'to:',
     'subject:',
     'text:',
+    'mandrillApiKey:'
 ]);
 
-$mandrillKey = 'key';
+$mandrillApiKey = isset($options['mandrillApiKey']) ? trim($options['mandrillApiKey']) : null;
 $mandrillUrl = 'https://mandrillapp.com/api/1.0/messages/send';
 $defaultFromEmail = 'mail@example.com';
 
@@ -39,7 +40,7 @@ foreach ($toAddresses as $address) {
 
 // Send Email
 $message = json_encode([
-    'key' => $mandrillKey,
+    'key' => $mandrillApiKey,
     'message' => [
         'text' => $text,
         'subject' => $subject,
