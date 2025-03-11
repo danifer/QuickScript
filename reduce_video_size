@@ -25,12 +25,18 @@ get_file_size() {
     fi
 }
 
-# Check if ffmpeg is installed
-if ! command -v ffmpeg &> /dev/null; then
-    echo "Error: ffmpeg is not installed or not in the PATH."
-    echo "Please install ffmpeg before running this script."
-    exit 1
-fi
+# Check if required commands are installed
+check_command() {
+    if ! command -v "$1" &> /dev/null; then
+        echo "Error: $1 is not installed or not in the PATH."
+        echo "Please install $1 before running this script."
+        exit 1
+    fi
+}
+
+check_command ffmpeg
+check_command tar
+check_command gzip
 
 # Check if a file was provided
 if [ $# -eq 0 ]; then
@@ -77,14 +83,15 @@ if [[ "$is_video_ext" == false ]]; then
     fi
 fi
 
-# Create output filename by replacing the original extension with .mp3
+# Create output filename by replacing the original extension with .mp4
 output_file="${input_file%.*}.mp4"
+# Create tar.gz filename
+tar_file="${input_file%.*}.tar.gz"
 
 echo "Converting '$input_file' to '$output_file'..."
 
 # Run the ffmpeg command
 ffmpeg -i "$input_file" -vcodec libx264 -crf 24 "$output_file"
-
 
 # Check if the conversion was successful
 if [ $? -eq 0 ]; then
@@ -94,10 +101,29 @@ if [ $? -eq 0 ]; then
     output_size=$(get_file_size "$output_file")
     echo "Output file size: $output_size"
     
-    # Calculate size reduction
-    if [ "$input_size" != "Unknown" ] && [ "$output_size" != "Unknown" ]; then
-        echo "Conversion complete!"
-        echo "Input: $input_file ($input_size) → Output: $output_file ($output_size)"
+    # Create tar.gz file
+    echo "Creating tar.gz archive: $tar_file"
+    tar -czf "$tar_file" -C "$(dirname "$output_file")" "$(basename "$output_file")"
+    
+    if [ $? -eq 0 ]; then
+        # Get the tar.gz file size
+        tar_size=$(get_file_size "$tar_file")
+        echo "Archive file size: $tar_size"
+        
+        # Remove the MP4 file
+        echo "Removing intermediate MP4 file..."
+        rm "$output_file"
+        
+        if [ $? -eq 0 ]; then
+            echo "Process complete!"
+            echo "Input: $input_file ($input_size) → Output: $tar_file ($tar_size)"
+        else
+            echo "Warning: Could not remove the MP4 file."
+            echo "Process completed with tar.gz archive created, but MP4 file remains."
+        fi
+    else
+        echo "Error: Failed to create tar.gz archive."
+        echo "MP4 file remains at: $output_file"
     fi
 else
     echo "Error: Conversion failed."
