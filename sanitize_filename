@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Function to display usage information
+usage() {
+    echo "Usage: $0 [-d] [-l] [-h] <string>"
+    echo "  -d    Add date prefix in format YYYY-MM-DD-"
+    echo "  -l    Convert string to lowercase"
+    echo "  -h    Display this help message"
+    exit 1
+}
+
+# Initialize variables
+add_date=false
+to_lowercase=false
+
+# Parse command line options
+while getopts "dlh" opt; do
+    case $opt in
+        d)
+            add_date=true
+            ;;
+        l)
+            to_lowercase=true
+            ;;
+        h)
+            usage
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            usage
+            ;;
+    esac
+done
+
+# Shift the options so $1 becomes the input string
+shift $((OPTIND-1))
+
+# Get the input string (either from argument or stdin)
+if [ $# -gt 0 ]; then
+    # Input from command-line argument
+    input_string="$1"
+elif [ ! -t 0 ]; then
+    # Input from pipe (stdin)
+    input_string=$(cat)
+else
+    # No input provided
+    echo "Error: No input string provided." >&2
+    usage
+fi
+
+# Replace spaces with underscores first
+input_with_underscores=$(echo "$input_string" | tr ' ' '_')
+
+# Convert to lowercase if requested
+if $to_lowercase; then
+    input_processed=$(echo "$input_with_underscores" | tr '[:upper:]' '[:lower:]')
+else
+    input_processed="$input_with_underscores"
+fi
+
+# Sanitize the string: remove all characters except alphanumeric, underscore, and hyphen
+sanitized_string=$(echo "$input_processed" | tr -cd 'a-zA-Z0-9_-.')
+
+# Add date prefix if requested
+if $add_date; then
+    date_prefix=$(date +"%Y-%m-%d-")
+    sanitized_string="${date_prefix}${sanitized_string}"
+fi
+
+# Output the sanitized string
+echo "$sanitized_string"
