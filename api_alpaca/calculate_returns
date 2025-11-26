@@ -1,0 +1,245 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.alpaca.markets/reference/stocksnapshotsingle
+
+$options = getopt('', [
+    'symbols:',
+    'prices:',
+    'investment:',
+    'format:',
+    'apiKey:',
+    'apiSecret:'
+]);
+$apiKey = $options['apiKey'] ?? getenv('ALPACA_PROD_API_KEY');
+$apiSecret = $options['apiSecret'] ?? getenv('ALPACA_PROD_API_SECRET');
+$format = $options['format'] ?? 'table';
+$symbols = $options['symbols'] ?? null;
+$prices = $options['prices'] ?? null;
+$investment = $options['investment'] ?? null;
+
+$allowedFormats = [
+    'json',
+    'csv',
+    'table',
+];
+
+if (empty($apiKey)) {
+    echo "No API_KEY supplied.\n";
+    exit(1);
+}
+
+if (empty($apiSecret)) {
+    echo "No API_SECRET supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+// Check if required arguments are provided
+if (
+    empty($symbols) ||
+    empty($prices) ||
+    empty($investment)
+) {
+    echo "Usage: {$argv[0]} --investment=INVESTMENT_AMOUNT \"--symbols=SYMBOL1,SYMBOL2,...\" \"--prices=HISTORIC_PRICE1,HISTORIC_PRICE2,...\"\n";
+    echo "Example: {$argv[0]} --investment=10000 \"--symbols=AAPL,MSFT,GOOG\" \"--prices=150.25,300.50,2500.75\"\n";
+    exit(1);
+}
+
+$investmentAmount = floatval($investment);
+$stockSymbols = explode(',', strtoupper(trim($symbols)));
+$symbolsList = implode(',', $stockSymbols);
+$historicPrices = explode(',', trim($prices));
+
+// Ensure historic prices match the number of symbols
+if (count($stockSymbols) !== count($historicPrices)) {
+    echo "Error: Number of symbols ({$stockSymbols}) must match number of historic prices ({$historicPrices}).\n";
+    exit(1);
+}
+
+$stocksArr = array_combine(
+    $stockSymbols,
+    $historicPrices
+);
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://data.alpaca.markets/v2/stocks/snapshots?feed=delayed_sip&symbols={$symbolsList}");
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "APCA-API-KEY-ID: {$apiKey}",
+    "APCA-API-SECRET-KEY: {$apiSecret}",
+    "accept: application/json"
+]);
+curl_close($ch);
+$apiResponse = curl_exec($ch);
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$responseData = json_decode($apiResponse, true);
+if (empty($responseData)) {
+    echo "No data available.";
+    exit(1);
+}
+
+$responseItems = [];
+$investmentPerStock = ($investmentAmount / count($stockSymbols));
+
+foreach ($stocksArr as $symbol => $historicPrice) {
+
+    if (!array_key_exists($symbol, $responseData)) {
+        echo "No data available for symbol ({$symbol}).";
+        exit(1);
+    }
+
+    $historicPrice = floatval($historicPrice);
+    $currentPrice = $responseData[$symbol]['dailyBar']['c'];
+
+    // Calculate metrics
+    $priceDelta = ($currentPrice - $historicPrice);
+    $deltaPercent = (($currentPrice - $historicPrice) / $historicPrice) * 100;
+    $sharesToBuy = floor($investmentPerStock / $historicPrice);
+    $computedInvestment = $sharesToBuy * $historicPrice;
+    $marketValue = ($sharesToBuy * $currentPrice);
+    $profitLoss = ($marketValue - $computedInvestment);
+
+    $responseItem = ResponseItemDTO::fromArray([
+        'symbol' => $symbol,
+        'currentPrice' => $currentPrice,
+        'historicPrice' => $historicPrice,
+        'priceDelta' => $priceDelta,
+        'deltaPercent' => $deltaPercent,
+        'sharesToBuy' => $sharesToBuy,
+        'computedInvestment' => $computedInvestment,
+        'marketValue' => $marketValue,
+        'profitLoss' => $profitLoss,
+    ]);
+
+    $responseItems[] = $responseItem;
+}
+
+if ($format === 'json') {
+    echo json_encode($responseItems, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'csv') {
+    // Create output buffer
+    $output = fopen('php://temp', 'r+');
+    fputcsv($output, array_keys((array) $responseItems[0]));
+
+    // Write records
+    foreach ($responseItems as $item) {
+        fputcsv($output, (array) $item);
+    }
+
+    // Get the contents of the output buffer
+    rewind($output);
+    $csvContent = stream_get_contents($output);
+    fclose($output);
+    echo $csvContent;
+
+    exit(0);
+}
+
+
+if ($format === 'table') {
+    // Display results in a table format
+    $columnWidth = 12;
+    $headers = [
+        'Symbol',
+        'Current',
+        'Historic',
+        'Difference',
+        'Diff %',
+        'Shares',
+        'Investment',
+        'Value',
+        'P/L',
+    ];
+    $header = implode(' | ', array_map(function($string) use ($columnWidth){
+        return str_pad($string, $columnWidth);
+    }, $headers));
+
+    echo "\n";
+    echo $header;
+    echo "\n";
+
+    $headerLength = strlen($header);
+    echo str_repeat("-", $headerLength) . "\n";
+
+    $totalInvestment = 0;
+    $totalValue = 0;
+    $totalProfitLoss = 0;
+
+    foreach ($responseItems as $key => $item) {
+        $arr = [
+            'symbol' => $item->symbol,
+            'currentPrice' => number_format($item->currentPrice,2),
+            'historicPrice' => number_format($item->historicPrice,2),
+            'priceDelta' => number_format($item->priceDelta,2),
+            'deltaPercent' => number_format($item->deltaPercent,2),
+            'sharesToBuy' => $item->sharesToBuy,
+            'computedInvestment' => number_format($item->computedInvestment,2),
+            'marketValue' => number_format($item->marketValue,2),
+            'profitLoss' => number_format($item->profitLoss,2),
+        ];
+        echo implode(' | ', array_map(function($string) use ($columnWidth){
+            return str_pad($string, $columnWidth);
+        }, $arr));
+        echo "\n";
+
+        $totalInvestment += $item->computedInvestment;
+        $totalValue += $item->marketValue;
+        $totalProfitLoss += $item->profitLoss;
+    }
+
+    echo str_repeat("-", $headerLength) . "\n";
+
+    // Display totals
+    $totalProfitLossPercent = ($totalProfitLoss / $totalInvestment) * 100;
+
+    echo "TOTAL SUMMARY:\n";
+    echo "Investment: $" . number_format($totalInvestment, 2) . "\n";
+    echo "Current Value: $" . number_format($totalValue, 2) . "\n";
+    echo "Total Profit/Loss: $" . number_format($totalProfitLoss, 2) . "\n";
+
+
+    // Add timestamp
+    echo "\nData as of: " . date('Y-m-d H:i:s') . "\n";
+}
+
+class ResponseItemDTO {
+    public ?string $symbol;
+    public ?string $currentPrice;
+    public ?string $historicPrice;
+    public ?string $priceDelta;
+    public ?string $deltaPercent;
+    public ?string $sharesToBuy;
+    public ?string $computedInvestment;
+    public ?string $marketValue;
+    public ?string $profitLoss;
+
+    public static function fromArray(array $arr): self
+    {
+        $dto = new self();
+        $dto->symbol = $arr['symbol'] ?? null;
+        $dto->currentPrice = $arr['currentPrice'] ?? null;
+        $dto->historicPrice = $arr['historicPrice'] ?? null;
+        $dto->priceDelta = $arr['priceDelta'] ?? null;
+        $dto->deltaPercent = $arr['deltaPercent'] ?? null;
+        $dto->sharesToBuy = $arr['sharesToBuy'] ?? null;
+        $dto->computedInvestment = $arr['computedInvestment'] ?? null;
+        $dto->marketValue = $arr['marketValue'] ?? null;
+        $dto->profitLoss = $arr['profitLoss'] ?? null;
+
+        return $dto;
+    }
+}

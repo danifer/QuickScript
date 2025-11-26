@@ -1,0 +1,13 @@
+#!/bin/bash
+echo "Code ownership analysis for current branch:"
+echo "=========================================="
+
+# Only analyze source code files (adjust extensions as needed)
+git ls-files | grep -E '\.(php)$' | \
+xargs -n1 git blame --line-porcelain | \
+sed -n 's/^author //p' | \
+sort | uniq -c | sort -rn | \
+awk -v total=$(git ls-files | grep -E '\.(php)$' | xargs cat | wc -l) \
+
+#git ls-files | xargs -n1 git blame --line-porcelain | grep '^author ' | sort | uniq -c | sort -rn | awk -v total=$(git ls-files | xargs cat | wc -l) '{printf "%s: %.1f%%\n", substr($0, index($0,$2)), $1*100/total}'
+

@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# Script to check for mountable USB devices
+# Save this file as usb_monitor.sh in a location like ~/scripts/
+
+# Path to log file
+LOG_FILE="$HOME/Library/Logs/usb_monitor.log"
+
+# Function to log messages with timestamp
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+# Create log directory if it doesn't exist
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# Log script startup
+log_message "USB monitor script started"
+
+# Get list of currently connected USB devices
+USB_DEVICES=$(system_profiler SPUSBDataType 2>/dev/null)
+
+# Check for mountable devices
+if echo "$USB_DEVICES" | grep -q "Media"; then
+    # Extract device names
+    DEVICE_NAMES=$(echo "$USB_DEVICES" | grep "Product ID" | awk -F ": " '{print $2}' | sort | uniq)
+
+    # Log each device found
+    log_message "Mountable USB devices found:"
+    echo "$DEVICE_NAMES" | while read device; do
+        if [ ! -z "$device" ]; then
+            log_message "  - $device"
+        fi
+    done
+
+    # Check for unmounted but mountable devices
+    UNMOUNTED_DEVICES=$(diskutil list | grep -i "external" | grep -v "mounted" | awk '{print $1}')
+
+    if [ ! -z "$UNMOUNTED_DEVICES" ]; then
+        log_message "Found unmounted but mountable devices:"
+        echo "$UNMOUNTED_DEVICES" | while read disk; do
+            log_message "  - $disk"
+
+            # Option: Uncomment the following line to auto-mount devices
+            # diskutil mount "$disk" >> "$LOG_FILE" 2>&1
+        done
+    fi
+else
+    log_message "No mountable USB devices detected"
+fi
+
+# Clean up old log entries (keep last 100 entries)
+if [ -f "$LOG_FILE" ]; then
+    tail -n 100 "$LOG_FILE" > "${LOG_FILE}.tmp"
+    mv "${LOG_FILE}.tmp" "$LOG_FILE"
+fi
+
+log_message "USB monitor check completed"

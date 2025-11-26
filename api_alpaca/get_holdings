@@ -1,0 +1,256 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.alpaca.markets/reference/stocksnapshots-1
+
+$options = getopt('', ['format:', 'source:', 'apiKey:', 'apiSecret:']);
+$apiKey = $options['apiKey'] ?? getenv('ALPACA_PROD_API_KEY');
+$apiSecret = $options['apiSecret'] ?? getenv('ALPACA_PROD_API_SECRET');
+$source = $options['source'] ?? getenv('ALPACA_HOLDINGS_LIST_PATH');
+$format = $options['format'] ?? 'table';
+$allowedFormats = [
+    'table',
+    'json',
+    'csv'
+];
+
+if (empty($apiKey)) {
+    echo "No API_KEY supplied.\n";
+    exit(1);
+}
+
+if (empty($apiSecret)) {
+    echo "No API_SECRET supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (!file_exists($source)) {
+    echo "No source file found.\n";
+    exit(1);
+}
+$data = file_get_contents($source);
+$holdings = json_decode($data);
+$requiredKeys = [
+    'account',
+    'symbol',
+    'name',
+    'qty',
+    'cost_basis',
+];
+
+$isFileValid = true;
+foreach ($holdings as $holding) {
+    if (count(array_intersect_key(array_flip($requiredKeys), (array) $holding)) !== count($requiredKeys)) {
+        echo sprintf("The source file is missing data. Required fields are [%s]", implode(', ', $requiredKeys));
+        echo "\n";
+        exit(1);
+    }
+}
+
+$stockSymbols = implode(',', array_unique(array_column($holdings, 'symbol')));
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://data.alpaca.markets/v2/stocks/snapshots?feed=delayed_sip&symbols={$stockSymbols}");
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "APCA-API-KEY-ID: {$apiKey}",
+    "APCA-API-SECRET-KEY: {$apiSecret}",
+    "accept: application/json"
+]);
+curl_close($ch);
+$apiResponse = curl_exec($ch);
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$responseData = json_decode($apiResponse, true);
+if (empty($responseData)) {
+    echo "No data available.";
+    exit(1);
+}
+
+$totalInvestment = 0;
+$totalMarketValue = 0;
+$totalProfitLoss = 0;
+$totalDailyProfitLoss = 0;
+$responseItems = [];
+
+foreach ($holdings as $holding) {
+    $account = $holding->account;
+    $symbol = $holding->symbol;
+    $stock = $responseData[$symbol];
+    $quantity = $holding->qty;
+    $currentPrice = $stock['dailyBar']['c'];
+    $prevDayPrice = $stock['prevDailyBar']['c'];
+    $priceDelta = ($currentPrice - $prevDayPrice);
+    $dailyChangePercent = ($priceDelta / $currentPrice) * 100;
+    $dailyProfitLoss = (($currentPrice - $prevDayPrice) * $quantity);
+    $costBasis = $holding->cost_basis;
+    $costBasisPerShare = ($costBasis / $quantity);
+    $marketValue = ($currentPrice * $quantity);
+    $priceChange = ($currentPrice - $costBasisPerShare);
+    $priceChangePercent = ($priceChange / $costBasisPerShare) * 100;
+    $profitLoss = ($marketValue - $costBasis);
+    $profitLossPercent = ($profitLoss / $costBasis) * 100;
+
+    // Track totals
+    $totalMarketValue += $marketValue;
+    $totalInvestment += $costBasis;
+    $totalProfitLoss += $profitLoss;
+    $totalDailyProfitLoss += ($priceDelta * $quantity);
+
+    $responseItem = ResponseItemDTO::fromArray([
+        'account' => $account,
+        'symbol' => $symbol,
+        'quantity' => $quantity,
+        'currentPrice' => $currentPrice,
+        'prevDayPrice' => $prevDayPrice,
+        'priceDelta' => $priceDelta,
+        'dailyChangePercent' => $dailyChangePercent,
+        'dailyProfitLoss' => $dailyProfitLoss,
+        'costBasis' => $costBasis,
+        'costBasisPerShare' => $costBasisPerShare,
+        'priceChange' => $priceChange,
+        'priceChangePercent' => $priceChangePercent,
+        'profitLoss' => $profitLoss,
+        'profitLossPercent' => $profitLossPercent,
+        'marketValue' => $marketValue,
+    ]);
+
+    $responseItems[] = $responseItem;
+}
+
+usort($responseItems, function($a, $b) {
+    return $b->dailyChangePercent <=> $a->dailyChangePercent;
+});
+
+if ($format === 'json') {
+    echo json_encode($responseItems, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'csv') {
+    // Create output buffer
+    $output = fopen('php://temp', 'r+');
+    fputcsv($output, array_keys((array) $responseItems[0]));
+
+    // Write records
+    foreach ($responseItems as $item) {
+        fputcsv($output, (array) $item);
+    }
+
+    // Get the contents of the output buffer
+    rewind($output);
+    $csvContent = stream_get_contents($output);
+    fclose($output);
+    echo $csvContent;
+
+    exit(0);
+}
+
+if ($format === 'table') {
+    // Display results in a table format
+    $columnWidth = 12;
+    $headers = [
+        'Account',
+        'Symbol',
+        'Quantity',
+        'Cost Basis',
+        'Previous',
+        'Current',
+        'Change %',
+        'Day P/L',
+        'Total P/L',
+        'Mkt Value',
+    ];
+    $header = implode(' | ', array_map(function($string) use ($columnWidth){
+        return str_pad($string, $columnWidth);
+    }, $headers));
+
+    echo "\n";
+    echo $header;
+    echo "\n";
+
+    $headerLength = strlen($header);
+    echo str_repeat("-", $headerLength) . "\n";
+    foreach ($responseItems as $key => $item) {
+        $arr = [
+            $item->account,
+            $item->symbol,
+            number_format($item->quantity),
+            number_format($item->costBasisPerShare,2),
+            number_format($item->prevDayPrice,2),
+            number_format($item->currentPrice,2),
+            number_format($item->dailyChangePercent,2),
+            number_format($item->dailyProfitLoss,2),
+            number_format($item->profitLoss,2),
+            number_format($item->marketValue,2),
+        ];
+        echo implode(' | ', array_map(function($string) use ($columnWidth){
+            return str_pad($string, $columnWidth);
+        }, $arr));
+        echo "\n";
+    }
+
+    echo str_repeat("-", $headerLength) . "\n";
+
+    // Display totals
+    $totalProfitLossPercent = ($totalProfitLoss / $totalInvestment) * 100;
+
+    echo "TOTAL SUMMARY:\n";
+    echo "Investment: $" . number_format($totalInvestment, 2) . "\n";
+    echo "Current Value: $" . number_format($totalMarketValue, 2) . "\n";
+    echo "Total Profit/Loss: $" . number_format($totalProfitLoss, 2) . "\n";
+    echo "Daily Profit/Loss: $" . number_format($totalDailyProfitLoss, 2) . "\n";
+
+    // Add timestamp
+    echo "\nData as of: " . date('Y-m-d H:i:s') . "\n";
+}
+
+class ResponseItemDTO {
+    public ?string $account;
+    public ?string $symbol;
+    public ?string $quantity;
+    public ?string $currentPrice;
+    public ?string $prevDayPrice;
+    public ?string $priceDelta;
+    public ?string $dailyChangePercent;
+    public ?string $dailyProfitLoss;
+    public ?string $costBasisPerShare;
+    public ?string $costBasis;
+    public ?string $marketValue;
+    public ?string $priceChange;
+    public ?string $priceChangePercent;
+    public ?string $profitLoss;
+    public ?string $profitLossPercent;
+
+    public static function fromArray(array $arr): self
+    {
+        $dto = new self();
+        $dto->account = $arr['account'] ?? null;
+        $dto->symbol = $arr['symbol'] ?? null;
+        $dto->quantity = $arr['quantity'] ?? null;
+        $dto->currentPrice = $arr['currentPrice'] ?? null;
+        $dto->prevDayPrice = $arr['prevDayPrice'] ?? null;
+        $dto->priceDelta = $arr['priceDelta'] ?? null;
+        $dto->dailyChangePercent = $arr['dailyChangePercent'] ?? null;
+        $dto->dailyProfitLoss = $arr['dailyProfitLoss'] ?? null;
+        $dto->costBasis = $arr['costBasis'] ?? null;
+        $dto->costBasisPerShare = $arr['costBasisPerShare'] ?? null;
+        $dto->priceChange = $arr['priceChange'] ?? null;
+        $dto->priceChangePercent = $arr['priceChangePercent'] ?? null;
+        $dto->profitLoss = $arr['profitLoss'] ?? null;
+        $dto->profitLossPercent = $arr['profitLossPercent'] ?? null;
+        $dto->marketValue = $arr['marketValue'] ?? null;
+
+        return $dto;
+    }
+}

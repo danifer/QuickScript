@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Script to list files changed between two branches by a specific author
+# Usage: my_branch_changes <base_branch> <comparison_branch> [author]
+
+BASE_BRANCH=$1
+COMPARE_BRANCH=$2
+AUTHOR=$3
+AUTHOR_PROVIDED=false
+
+# Check if required arguments are provided
+if [ -z "$BASE_BRANCH" ] || [ -z "$COMPARE_BRANCH" ]; then
+    echo "Usage: $0 <base_branch> <comparison_branch> [author]"
+    echo "Example: $0 main feature-branch"
+    echo "Example: $0 main feature-branch \"John Doe\""
+    exit 1
+fi
+
+# If author not provided, default to git config user.name, then to system user
+if [ -z "$AUTHOR" ]; then
+    AUTHOR=$(git config user.name)
+    if [ -z "$AUTHOR" ]; then
+        AUTHOR=$(whoami)
+    fi
+else
+    AUTHOR_PROVIDED=true
+fi
+
+# Run the git command to list changed files
+git log --author="$AUTHOR" --name-status --pretty=format: $BASE_BRANCH..$COMPARE_BRANCH | grep -v '^$' | sort -u
+
+# Colors for output
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+echo ""
+echo -e "${CYAN}Tip:${NC} To filter for only Added/Modified files, pipe through grep:"
+if [ "$AUTHOR_PROVIDED" = true ]; then
+    echo -e "  ${GREEN}$0 $BASE_BRANCH $COMPARE_BRANCH '$AUTHOR' | grep '^[AM]'${NC}"
+else
+    echo -e "  ${GREEN}$0 $BASE_BRANCH $COMPARE_BRANCH | grep '^[AM]'${NC}"
+fi
+echo ""

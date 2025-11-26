@@ -1,0 +1,60 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.alpaca.markets/reference/stocksnapshotsingle
+
+$options = getopt('', ['format:', 'apiKey:', 'apiSecret:']);
+$apiKey = $options['apiKey'] ?? getenv('ALPACA_PROD_API_KEY');
+$apiSecret = $options['apiSecret'] ?? getenv('ALPACA_PROD_API_SECRET');
+$format = $options['format'] ?? 'json';
+$allowedFormats = [
+    'json',
+];
+
+if (empty($apiKey)) {
+    echo "No API_KEY supplied.\n";
+    exit(1);
+}
+
+if (empty($apiSecret)) {
+    echo "No API_SECRET supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+// Check if stock symbol is provided as command line argument
+if (empty($argv[1])) {
+    echo "No STOCK SYMBOL supplied.\n";
+    exit(1);
+}
+
+$stockSymbol = $argv[1];
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://data.alpaca.markets/v2/stocks/{$stockSymbol}/snapshot");
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "APCA-API-KEY-ID: {$apiKey}",
+    "APCA-API-SECRET-KEY: {$apiSecret}",
+    "accept: application/json"
+]);
+curl_close($ch);
+$apiResponse = curl_exec($ch);
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$responseData = json_decode($apiResponse, true);
+if (empty($responseData)) {
+    echo "No data available.";
+    exit(1);
+}
+
+echo json_encode($responseData, JSON_PRETTY_PRINT) . "\n";
