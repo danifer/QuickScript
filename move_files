@@ -1,0 +1,43 @@
+#!/usr/bin/env php
+<?php
+
+$options = getopt('', ['ignore-hidden']);
+$ignoreHidden = isset($options['ignore-hidden']);
+
+// After getopt processes options, remaining args are still in $argv
+// We need to find the first non-option argument
+$sourceDir = null;
+foreach ($argv as $i => $arg) {
+    if ($i === 0) continue; // Skip script name
+    if ($arg === '--ignore-hidden') continue;
+    $sourceDir = $arg;
+    break;
+}
+
+if (!$sourceDir) {
+    echo "Usage: {$argv[0]} [--ignore-hidden] <source_directory>\n";
+    echo "  --ignore-hidden  Skip files and directories starting with '.'\n";
+    exit(1);
+}
+
+$it = new RecursiveDirectoryIterator($sourceDir, RecursiveDirectoryIterator::SKIP_DOTS);
+
+$i=0;
+foreach(new RecursiveIteratorIterator($it) as $file) {
+
+    // Skip hidden files/directories if flag is set
+    if ($ignoreHidden && str_starts_with($file->getBasename(), '.')) {
+        continue;
+    }
+
+    $new = '/target/'.$file->getBasename();
+
+    //copy($file->getPathname(), $new);
+    echo sprintf(
+        'mv %s %s;',
+        $file->getPathname(),
+        $new
+    ) . PHP_EOL;
+
+    $i++;
+}

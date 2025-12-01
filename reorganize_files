@@ -1,3 +1,4 @@
+#!/usr/bin/env php
 <?php
 
 $it = new RecursiveDirectoryIterator($argv[1], RecursiveDirectoryIterator::SKIP_DOTS);
