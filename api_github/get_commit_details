@@ -1,0 +1,205 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.github.com/en/rest/commits/commits#get-a-commit
+
+$options = getopt('', [
+    'repo:',
+    'owner:',
+    'sha:',
+    'format:',
+    'token:'
+]);
+
+$token = $options['token'] ?? getenv('GITHUB_TOKEN');
+$format = $options['format'] ?? 'json';
+$repo = $options['repo'] ?? null;
+$owner = $options['owner'] ?? null;
+$sha = $options['sha'] ?? null;
+
+$allowedFormats = ['json', 'table'];
+
+if (empty($token)) {
+    echo "No GITHUB_TOKEN supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (empty($repo) || empty($owner) || empty($sha)) {
+    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO --sha=COMMIT_SHA\n";
+    echo "Required:\n";
+    echo "  --owner=OWNER           Repository owner\n";
+    echo "  --repo=REPO             Repository name\n";
+    echo "  --sha=SHA               Commit SHA (full or short)\n";
+    echo "Optional:\n";
+    echo "  --format=FORMAT         Output format: json, table (default: json)\n";
+    echo "Example: {$argv[0]} --owner=anthropics --repo=claude-code --sha=abc123\n";
+    exit(1);
+}
+
+$url = "https://api.github.com/repos/{$owner}/{$repo}/commits/{$sha}";
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$apiResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$apiResponse}\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$commit = json_decode($apiResponse, true);
+if (empty($commit)) {
+    echo "No commit found.\n";
+    exit(1);
+}
+
+$files = [];
+foreach ($commit['files'] ?? [] as $file) {
+    $files[] = FileChangeDTO::fromArray([
+        'filename' => $file['filename'],
+        'status' => $file['status'],
+        'additions' => $file['additions'],
+        'deletions' => $file['deletions'],
+        'changes' => $file['changes'],
+        'patch' => $file['patch'] ?? null,
+    ]);
+}
+
+$commitDetails = CommitDetailsDTO::fromArray([
+    'sha' => substr($commit['sha'], 0, 7),
+    'fullSha' => $commit['sha'],
+    'author' => $commit['commit']['author']['name'],
+    'email' => $commit['commit']['author']['email'],
+    'date' => $commit['commit']['author']['date'],
+    'message' => $commit['commit']['message'],
+    'additions' => $commit['stats']['additions'],
+    'deletions' => $commit['stats']['deletions'],
+    'totalChanges' => $commit['stats']['total'],
+    'changedFiles' => count($commit['files']),
+    'files' => $files,
+    'url' => $commit['html_url'],
+]);
+
+if ($format === 'json') {
+    echo json_encode($commitDetails, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'table') {
+    echo "\n";
+    echo "Commit Details\n";
+    echo str_repeat("=", 100) . "\n";
+    echo "SHA:        {$commitDetails->fullSha}\n";
+    echo "Author:     {$commitDetails->author} <{$commitDetails->email}>\n";
+    echo "Date:       " . date('Y-m-d H:i:s', strtotime($commitDetails->date)) . "\n";
+    echo "URL:        {$commitDetails->url}\n";
+    echo str_repeat("-", 100) . "\n";
+    echo "Message:\n";
+    echo $commitDetails->message . "\n";
+    echo str_repeat("-", 100) . "\n";
+    echo "Statistics:\n";
+    echo "  Files changed: {$commitDetails->changedFiles}\n";
+    echo "  Additions:     +{$commitDetails->additions}\n";
+    echo "  Deletions:     -{$commitDetails->deletions}\n";
+    echo "  Total changes: {$commitDetails->totalChanges}\n";
+    echo str_repeat("-", 100) . "\n";
+    echo "Files Changed:\n\n";
+
+    foreach ($commitDetails->files as $file) {
+        $statusSymbol = match($file->status) {
+            'added' => 'A',
+            'modified' => 'M',
+            'removed' => 'D',
+            'renamed' => 'R',
+            default => '?'
+        };
+
+        echo sprintf("  [%s] %s (+%d -%d)\n",
+            $statusSymbol,
+            $file->filename,
+            $file->additions,
+            $file->deletions
+        );
+    }
+    echo "\n";
+}
+
+class CommitDetailsDTO {
+    public ?string $sha;
+    public ?string $fullSha;
+    public ?string $author;
+    public ?string $email;
+    public ?string $date;
+    public ?string $message;
+    public ?int $additions;
+    public ?int $deletions;
+    public ?int $totalChanges;
+    public ?int $changedFiles;
+    public ?array $files;
+    public ?string $url;
+
+    public static function fromArray(array $arr): self
+    {
+        $dto = new self();
+        $dto->sha = $arr['sha'] ?? null;
+        $dto->fullSha = $arr['fullSha'] ?? null;
+        $dto->author = $arr['author'] ?? null;
+        $dto->email = $arr['email'] ?? null;
+        $dto->date = $arr['date'] ?? null;
+        $dto->message = $arr['message'] ?? null;
+        $dto->additions = $arr['additions'] ?? null;
+        $dto->deletions = $arr['deletions'] ?? null;
+        $dto->totalChanges = $arr['totalChanges'] ?? null;
+        $dto->changedFiles = $arr['changedFiles'] ?? null;
+        $dto->files = $arr['files'] ?? [];
+        $dto->url = $arr['url'] ?? null;
+
+        return $dto;
+    }
+}
+
+class FileChangeDTO {
+    public ?string $filename;
+    public ?string $status;
+    public ?int $additions;
+    public ?int $deletions;
+    public ?int $changes;
+    public ?string $patch;
+
+    public static function fromArray(array $arr): self
+    {
+        $dto = new self();
+        $dto->filename = $arr['filename'] ?? null;
+        $dto->status = $arr['status'] ?? null;
+        $dto->additions = $arr['additions'] ?? null;
+        $dto->deletions = $arr['deletions'] ?? null;
+        $dto->changes = $arr['changes'] ?? null;
+        $dto->patch = $arr['patch'] ?? null;
+
+        return $dto;
+    }
+}

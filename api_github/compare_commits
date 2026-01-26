@@ -1,0 +1,186 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.github.com/en/rest/commits/commits#compare-two-commits
+
+$options = getopt('', [
+    'repo:',
+    'owner:',
+    'base:',
+    'head:',
+    'format:',
+    'token:'
+]);
+
+$token = $options['token'] ?? getenv('GITHUB_TOKEN');
+$format = $options['format'] ?? 'table';
+$repo = $options['repo'] ?? null;
+$owner = $options['owner'] ?? null;
+$base = $options['base'] ?? null;
+$head = $options['head'] ?? null;
+
+$allowedFormats = ['json', 'table'];
+
+if (empty($token)) {
+    echo "No GITHUB_TOKEN supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (empty($repo) || empty($owner) || empty($base) || empty($head)) {
+    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO --base=BASE --head=HEAD\n";
+    echo "Required:\n";
+    echo "  --owner=OWNER           Repository owner\n";
+    echo "  --repo=REPO             Repository name\n";
+    echo "  --base=BASE             Base branch/commit SHA\n";
+    echo "  --head=HEAD             Head branch/commit SHA to compare\n";
+    echo "Optional:\n";
+    echo "  --format=FORMAT         Output format: json, table (default: table)\n";
+    echo "Example: {$argv[0]} --owner=anthropics --repo=claude-code --base=main --head=feature-branch\n";
+    exit(1);
+}
+
+$url = "https://api.github.com/repos/{$owner}/{$repo}/compare/{$base}...{$head}";
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$apiResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$apiResponse}\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$comparison = json_decode($apiResponse, true);
+if (empty($comparison)) {
+    echo "No comparison data found.\n";
+    exit(1);
+}
+
+$commits = [];
+foreach ($comparison['commits'] ?? [] as $commit) {
+    $commits[] = [
+        'sha' => substr($commit['sha'], 0, 7),
+        'author' => $commit['commit']['author']['name'],
+        'date' => date('Y-m-d H:i', strtotime($commit['commit']['author']['date'])),
+        'message' => explode("\n", $commit['commit']['message'])[0],
+    ];
+}
+
+$files = [];
+foreach ($comparison['files'] ?? [] as $file) {
+    $files[] = [
+        'filename' => $file['filename'],
+        'status' => $file['status'],
+        'additions' => $file['additions'],
+        'deletions' => $file['deletions'],
+        'changes' => $file['changes'],
+    ];
+}
+
+$comparisonData = [
+    'status' => $comparison['status'],
+    'aheadBy' => $comparison['ahead_by'],
+    'behindBy' => $comparison['behind_by'],
+    'totalCommits' => $comparison['total_commits'],
+    'baseCommit' => substr($comparison['base_commit']['sha'], 0, 7),
+    'mergeBaseCommit' => substr($comparison['merge_base_commit']['sha'], 0, 7),
+    'additions' => 0,
+    'deletions' => 0,
+    'changedFiles' => count($files),
+    'commits' => $commits,
+    'files' => $files,
+    'url' => $comparison['html_url'],
+];
+
+// Calculate total additions/deletions
+foreach ($files as $file) {
+    $comparisonData['additions'] += $file['additions'];
+    $comparisonData['deletions'] += $file['deletions'];
+}
+
+if ($format === 'json') {
+    echo json_encode($comparisonData, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'table') {
+    echo "\n";
+    echo "Comparison: {$base}...{$head}\n";
+    echo str_repeat("=", 100) . "\n";
+    echo "Repository:      {$owner}/{$repo}\n";
+    echo "Status:          {$comparisonData['status']}\n";
+    echo "Ahead by:        {$comparisonData['aheadBy']} commits\n";
+    echo "Behind by:       {$comparisonData['behindBy']} commits\n";
+    echo "Base commit:     {$comparisonData['baseCommit']}\n";
+    echo "Merge base:      {$comparisonData['mergeBaseCommit']}\n";
+    echo "URL:             {$comparisonData['url']}\n";
+    echo str_repeat("-", 100) . "\n";
+    echo "Statistics:\n";
+    echo "  Total commits:  {$comparisonData['totalCommits']}\n";
+    echo "  Files changed:  {$comparisonData['changedFiles']}\n";
+    echo "  Additions:      +{$comparisonData['additions']}\n";
+    echo "  Deletions:      -{$comparisonData['deletions']}\n";
+    echo str_repeat("-", 100) . "\n";
+
+    if (!empty($commits)) {
+        echo "Commits:\n\n";
+        foreach ($commits as $commit) {
+            $message = strlen($commit['message']) > 70
+                ? substr($commit['message'], 0, 67) . '...'
+                : $commit['message'];
+            echo sprintf("  %s  %-20s  %s  %s\n",
+                $commit['sha'],
+                substr($commit['author'], 0, 20),
+                $commit['date'],
+                $message
+            );
+        }
+        echo "\n";
+    }
+
+    if (!empty($files)) {
+        echo str_repeat("-", 100) . "\n";
+        echo "Files Changed:\n\n";
+        foreach ($files as $file) {
+            $statusSymbol = match($file['status']) {
+                'added' => 'A',
+                'modified' => 'M',
+                'removed' => 'D',
+                'renamed' => 'R',
+                default => '?'
+            };
+
+            echo sprintf("  [%s] %-70s (+%-4d -%-4d)\n",
+                $statusSymbol,
+                $file['filename'],
+                $file['additions'],
+                $file['deletions']
+            );
+        }
+    }
+    echo "\n";
+}

@@ -1,0 +1,173 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.github.com/en/rest/repos/repos#get-a-repository
+
+$options = getopt('', [
+    'repo:',
+    'owner:',
+    'format:',
+    'token:'
+]);
+
+$token = $options['token'] ?? getenv('GITHUB_TOKEN');
+$format = $options['format'] ?? 'table';
+$repo = $options['repo'] ?? null;
+$owner = $options['owner'] ?? null;
+
+$allowedFormats = ['json', 'table'];
+
+if (empty($token)) {
+    echo "No GITHUB_TOKEN supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (empty($repo) || empty($owner)) {
+    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO\n";
+    echo "Required:\n";
+    echo "  --owner=OWNER           Repository owner\n";
+    echo "  --repo=REPO             Repository name\n";
+    echo "Optional:\n";
+    echo "  --format=FORMAT         Output format: json, table (default: table)\n";
+    echo "Example: {$argv[0]} --owner=facebook --repo=react\n";
+    exit(1);
+}
+
+$url = "https://api.github.com/repos/{$owner}/{$repo}";
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$apiResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$apiResponse}\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$repoData = json_decode($apiResponse, true);
+if (empty($repoData)) {
+    echo "No repository data found.\n";
+    exit(1);
+}
+
+$details = [
+    'name' => $repoData['name'],
+    'fullName' => $repoData['full_name'],
+    'description' => $repoData['description'] ?? 'No description',
+    'visibility' => $repoData['private'] ? 'private' : 'public',
+    'owner' => $repoData['owner']['login'],
+    'ownerType' => $repoData['owner']['type'],
+    'url' => $repoData['html_url'],
+    'cloneUrl' => $repoData['clone_url'],
+    'sshUrl' => $repoData['ssh_url'],
+    'homepage' => $repoData['homepage'] ?? 'N/A',
+    'language' => $repoData['language'] ?? 'N/A',
+    'defaultBranch' => $repoData['default_branch'],
+    'created' => date('Y-m-d H:i:s', strtotime($repoData['created_at'])),
+    'updated' => date('Y-m-d H:i:s', strtotime($repoData['updated_at'])),
+    'pushed' => date('Y-m-d H:i:s', strtotime($repoData['pushed_at'])),
+    'size' => $repoData['size'], // in KB
+    'stars' => $repoData['stargazers_count'],
+    'watchers' => $repoData['watchers_count'],
+    'forks' => $repoData['forks_count'],
+    'openIssues' => $repoData['open_issues_count'],
+    'hasIssues' => $repoData['has_issues'] ? 'yes' : 'no',
+    'hasProjects' => $repoData['has_projects'] ? 'yes' : 'no',
+    'hasWiki' => $repoData['has_wiki'] ? 'yes' : 'no',
+    'hasPages' => $repoData['has_pages'] ? 'yes' : 'no',
+    'hasDownloads' => $repoData['has_downloads'] ? 'yes' : 'no',
+    'archived' => $repoData['archived'] ? 'yes' : 'no',
+    'disabled' => $repoData['disabled'] ? 'yes' : 'no',
+    'license' => $repoData['license']['name'] ?? 'None',
+    'topics' => $repoData['topics'] ?? [],
+];
+
+if ($format === 'json') {
+    echo json_encode($details, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'table') {
+    echo "\n";
+    echo "Repository Details\n";
+    echo str_repeat("=", 100) . "\n";
+    echo "\n";
+
+    echo "Basic Information:\n";
+    echo str_repeat("-", 100) . "\n";
+    echo sprintf("  %-20s %s\n", "Name:", $details['name']);
+    echo sprintf("  %-20s %s\n", "Full Name:", $details['fullName']);
+    echo sprintf("  %-20s %s\n", "Owner:", $details['owner'] . " (" . $details['ownerType'] . ")");
+    echo sprintf("  %-20s %s\n", "Visibility:", $details['visibility']);
+    echo sprintf("  %-20s %s\n", "Description:", $details['description']);
+    echo sprintf("  %-20s %s\n", "URL:", $details['url']);
+    echo sprintf("  %-20s %s\n", "Homepage:", $details['homepage']);
+    echo "\n";
+
+    echo "Repository Stats:\n";
+    echo str_repeat("-", 100) . "\n";
+    echo sprintf("  %-20s %s\n", "Language:", $details['language']);
+    echo sprintf("  %-20s %s\n", "Default Branch:", $details['defaultBranch']);
+    echo sprintf("  %-20s %d\n", "Stars:", $details['stars']);
+    echo sprintf("  %-20s %d\n", "Watchers:", $details['watchers']);
+    echo sprintf("  %-20s %d\n", "Forks:", $details['forks']);
+    echo sprintf("  %-20s %d\n", "Open Issues:", $details['openIssues']);
+    echo sprintf("  %-20s %s KB\n", "Size:", number_format($details['size']));
+    echo sprintf("  %-20s %s\n", "License:", $details['license']);
+    echo "\n";
+
+    echo "Dates:\n";
+    echo str_repeat("-", 100) . "\n";
+    echo sprintf("  %-20s %s\n", "Created:", $details['created']);
+    echo sprintf("  %-20s %s\n", "Last Updated:", $details['updated']);
+    echo sprintf("  %-20s %s\n", "Last Push:", $details['pushed']);
+    echo "\n";
+
+    echo "Features:\n";
+    echo str_repeat("-", 100) . "\n";
+    echo sprintf("  %-20s %s\n", "Issues:", $details['hasIssues']);
+    echo sprintf("  %-20s %s\n", "Projects:", $details['hasProjects']);
+    echo sprintf("  %-20s %s\n", "Wiki:", $details['hasWiki']);
+    echo sprintf("  %-20s %s\n", "Pages:", $details['hasPages']);
+    echo sprintf("  %-20s %s\n", "Downloads:", $details['hasDownloads']);
+    echo sprintf("  %-20s %s\n", "Archived:", $details['archived']);
+    echo sprintf("  %-20s %s\n", "Disabled:", $details['disabled']);
+    echo "\n";
+
+    if (!empty($details['topics'])) {
+        echo "Topics:\n";
+        echo str_repeat("-", 100) . "\n";
+        echo "  " . implode(", ", $details['topics']) . "\n";
+        echo "\n";
+    }
+
+    echo "Clone URLs:\n";
+    echo str_repeat("-", 100) . "\n";
+    echo sprintf("  %-20s %s\n", "HTTPS:", $details['cloneUrl']);
+    echo sprintf("  %-20s %s\n", "SSH:", $details['sshUrl']);
+    echo "\n";
+}

@@ -1,0 +1,210 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.github.com/en/rest/commits/commits
+
+$options = getopt('', [
+    'repo:',
+    'owner:',
+    'branch:',
+    'since:',
+    'until:',
+    'author:',
+    'limit:',
+    'format:',
+    'token:'
+]);
+
+$token = $options['token'] ?? getenv('GITHUB_TOKEN');
+$format = $options['format'] ?? 'table';
+$repo = $options['repo'] ?? null;
+$owner = $options['owner'] ?? null;
+$branch = $options['branch'] ?? null;
+$since = $options['since'] ?? null;
+$until = $options['until'] ?? null;
+$author = $options['author'] ?? null;
+$limit = $options['limit'] ?? 30;
+
+$allowedFormats = ['json', 'csv', 'table'];
+
+if (empty($token)) {
+    echo "No GITHUB_TOKEN supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (empty($repo) || empty($owner)) {
+    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO [options]\n";
+    echo "Required:\n";
+    echo "  --owner=OWNER           Repository owner\n";
+    echo "  --repo=REPO             Repository name\n";
+    echo "Optional:\n";
+    echo "  --branch=BRANCH         Branch name (default: default branch)\n";
+    echo "  --since=YYYY-MM-DD      Show commits after this date\n";
+    echo "  --until=YYYY-MM-DD      Show commits before this date\n";
+    echo "  --author=AUTHOR         Filter by commit author\n";
+    echo "  --limit=N               Number of commits to fetch (default: 30)\n";
+    echo "  --format=FORMAT         Output format: json, csv, table (default: table)\n";
+    echo "Example: {$argv[0]} --owner=anthropics --repo=claude-code --limit=10\n";
+    exit(1);
+}
+
+// Build query parameters
+$queryParams = [
+    'per_page' => min($limit, 100)
+];
+
+if ($branch) {
+    $queryParams['sha'] = $branch;
+}
+if ($since) {
+    $queryParams['since'] = $since . 'T00:00:00Z';
+}
+if ($until) {
+    $queryParams['until'] = $until . 'T23:59:59Z';
+}
+if ($author) {
+    $queryParams['author'] = $author;
+}
+
+$queryString = http_build_query($queryParams);
+$url = "https://api.github.com/repos/{$owner}/{$repo}/commits?{$queryString}";
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$apiResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$apiResponse}\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$responseData = json_decode($apiResponse, true);
+if (empty($responseData)) {
+    echo "No commits found.\n";
+    exit(0);
+}
+
+$responseItems = [];
+foreach ($responseData as $commit) {
+    $responseItem = CommitDTO::fromArray([
+        'sha' => substr($commit['sha'], 0, 7),
+        'fullSha' => $commit['sha'],
+        'author' => $commit['commit']['author']['name'],
+        'email' => $commit['commit']['author']['email'],
+        'date' => date('Y-m-d H:i', strtotime($commit['commit']['author']['date'])),
+        'message' => explode("\n", $commit['commit']['message'])[0],
+        'additions' => null,
+        'deletions' => null,
+        'changedFiles' => null,
+    ]);
+    $responseItems[] = $responseItem;
+}
+
+if ($format === 'json') {
+    echo json_encode($responseItems, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'csv') {
+    $output = fopen('php://temp', 'r+');
+    fputcsv($output, ['sha', 'author', 'email', 'date', 'message']);
+
+    foreach ($responseItems as $item) {
+        fputcsv($output, [
+            $item->sha,
+            $item->author,
+            $item->email,
+            $item->date,
+            $item->message
+        ]);
+    }
+
+    rewind($output);
+    $csvContent = stream_get_contents($output);
+    fclose($output);
+    echo $csvContent;
+    exit(0);
+}
+
+if ($format === 'table') {
+    echo "\n";
+    echo "Repository: {$owner}/{$repo}\n";
+    if ($branch) echo "Branch: {$branch}\n";
+    echo str_repeat("-", 120) . "\n";
+
+    $shaWidth = 9;
+    $authorWidth = 20;
+    $dateWidth = 16;
+    $messageWidth = 70;
+
+    printf("%-{$shaWidth}s | %-{$authorWidth}s | %-{$dateWidth}s | %-{$messageWidth}s\n",
+        'SHA', 'Author', 'Date', 'Message');
+    echo str_repeat("-", 120) . "\n";
+
+    foreach ($responseItems as $item) {
+        $message = strlen($item->message) > $messageWidth
+            ? substr($item->message, 0, $messageWidth - 3) . '...'
+            : $item->message;
+        $author = strlen($item->author) > $authorWidth
+            ? substr($item->author, 0, $authorWidth - 3) . '...'
+            : $item->author;
+
+        printf("%-{$shaWidth}s | %-{$authorWidth}s | %-{$dateWidth}s | %-{$messageWidth}s\n",
+            $item->sha, $author, $item->date, $message);
+    }
+
+    echo str_repeat("-", 120) . "\n";
+    echo "Total commits: " . count($responseItems) . "\n\n";
+}
+
+class CommitDTO {
+    public ?string $sha;
+    public ?string $fullSha;
+    public ?string $author;
+    public ?string $email;
+    public ?string $date;
+    public ?string $message;
+    public ?int $additions;
+    public ?int $deletions;
+    public ?int $changedFiles;
+
+    public static function fromArray(array $arr): self
+    {
+        $dto = new self();
+        $dto->sha = $arr['sha'] ?? null;
+        $dto->fullSha = $arr['fullSha'] ?? null;
+        $dto->author = $arr['author'] ?? null;
+        $dto->email = $arr['email'] ?? null;
+        $dto->date = $arr['date'] ?? null;
+        $dto->message = $arr['message'] ?? null;
+        $dto->additions = $arr['additions'] ?? null;
+        $dto->deletions = $arr['deletions'] ?? null;
+        $dto->changedFiles = $arr['changedFiles'] ?? null;
+
+        return $dto;
+    }
+}

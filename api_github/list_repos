@@ -1,0 +1,222 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.github.com/en/rest/repos/repos#list-repositories-for-a-user
+
+$options = getopt('', [
+    'owner:',
+    'type:',
+    'sort:',
+    'limit:',
+    'format:',
+    'token:'
+]);
+
+$token = $options['token'] ?? getenv('GITHUB_TOKEN');
+$format = $options['format'] ?? 'table';
+$owner = $options['owner'] ?? null;
+$type = $options['type'] ?? 'all';
+$sort = $options['sort'] ?? 'updated';
+$limit = $options['limit'] ?? 100;
+
+$allowedFormats = ['json', 'csv', 'table'];
+$allowedTypes = ['all', 'owner', 'member'];
+$allowedSort = ['created', 'updated', 'pushed', 'full_name'];
+
+if (empty($token)) {
+    echo "No GITHUB_TOKEN supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (!in_array($type, $allowedTypes)) {
+    echo sprintf('Invalid type. Valid types are %s%s', implode(', ', $allowedTypes), PHP_EOL);
+    exit(1);
+}
+
+if (!in_array($sort, $allowedSort)) {
+    echo sprintf('Invalid sort. Valid sorts are %s%s', implode(', ', $allowedSort), PHP_EOL);
+    exit(1);
+}
+
+if (empty($owner)) {
+    echo "Usage: {$argv[0]} --owner=OWNER [options]\n";
+    echo "Required:\n";
+    echo "  --owner=OWNER           Repository owner (username or organization)\n";
+    echo "Optional:\n";
+    echo "  --type=TYPE             Type: all, owner, member (default: all)\n";
+    echo "  --sort=SORT             Sort by: created, updated, pushed, full_name (default: updated)\n";
+    echo "  --limit=N               Number of repos to fetch (default: 100)\n";
+    echo "  --format=FORMAT         Output format: json, csv, table (default: table)\n";
+    echo "Example: {$argv[0]} --owner=facebook --limit=20\n";
+    exit(1);
+}
+
+// Build query parameters
+$queryParams = [
+    'type' => $type,
+    'sort' => $sort,
+    'per_page' => min($limit, 100),
+    'direction' => 'desc'
+];
+
+$queryString = http_build_query($queryParams);
+
+// Try as user first, then as org
+$url = "https://api.github.com/users/{$owner}/repos?{$queryString}";
+
+// Initialize cURL session
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$apiResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+// If not found as user, try as organization
+if ($httpCode === 404) {
+    $url = "https://api.github.com/orgs/{$owner}/repos?{$queryString}";
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        "Authorization: Bearer {$token}",
+        "Accept: application/vnd.github+json",
+        "X-GitHub-Api-Version: 2022-11-28",
+        "User-Agent: PHP-GitHub-Client"
+    ]);
+
+    $apiResponse = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+    if (curl_errno($ch)) {
+        echo "cURL Error: " . curl_error($ch) . "\n";
+        curl_close($ch);
+        exit(1);
+    }
+
+    curl_close($ch);
+}
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$apiResponse}\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$repositories = json_decode($apiResponse, true);
+if (empty($repositories)) {
+    echo "No repositories found.\n";
+    exit(0);
+}
+
+$responseItems = [];
+foreach ($repositories as $repo) {
+    $responseItems[] = [
+        'name' => $repo['name'],
+        'fullName' => $repo['full_name'],
+        'private' => $repo['private'] ? 'private' : 'public',
+        'description' => $repo['description'] ?? '',
+        'language' => $repo['language'] ?? 'N/A',
+        'stars' => $repo['stargazers_count'],
+        'forks' => $repo['forks_count'],
+        'openIssues' => $repo['open_issues_count'],
+        'updated' => date('Y-m-d H:i', strtotime($repo['updated_at'])),
+        'url' => $repo['html_url'],
+        'defaultBranch' => $repo['default_branch'],
+    ];
+}
+
+if ($format === 'json') {
+    echo json_encode($responseItems, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'csv') {
+    $output = fopen('php://temp', 'r+');
+    fputcsv($output, ['name', 'visibility', 'description', 'language', 'stars', 'forks', 'issues', 'updated', 'url']);
+
+    foreach ($responseItems as $item) {
+        fputcsv($output, [
+            $item['name'],
+            $item['private'],
+            $item['description'],
+            $item['language'],
+            $item['stars'],
+            $item['forks'],
+            $item['openIssues'],
+            $item['updated'],
+            $item['url']
+        ]);
+    }
+
+    rewind($output);
+    $csvContent = stream_get_contents($output);
+    fclose($output);
+    echo $csvContent;
+    exit(0);
+}
+
+if ($format === 'table') {
+    echo "\n";
+    echo "Repositories for: {$owner}\n";
+    echo str_repeat("-", 140) . "\n";
+
+    $nameWidth = 30;
+    $visWidth = 7;
+    $langWidth = 12;
+    $starsWidth = 6;
+    $forksWidth = 6;
+    $issuesWidth = 7;
+    $updatedWidth = 16;
+    $descWidth = 45;
+
+    printf("%-{$nameWidth}s | %-{$visWidth}s | %-{$langWidth}s | %-{$starsWidth}s | %-{$forksWidth}s | %-{$issuesWidth}s | %-{$updatedWidth}s | %-{$descWidth}s\n",
+        'Name', 'Vis', 'Language', 'Stars', 'Forks', 'Issues', 'Updated', 'Description');
+    echo str_repeat("-", 140) . "\n";
+
+    foreach ($responseItems as $item) {
+        $name = strlen($item['name']) > $nameWidth
+            ? substr($item['name'], 0, $nameWidth - 3) . '...'
+            : $item['name'];
+        $desc = strlen($item['description']) > $descWidth
+            ? substr($item['description'], 0, $descWidth - 3) . '...'
+            : $item['description'];
+        $lang = strlen($item['language']) > $langWidth
+            ? substr($item['language'], 0, $langWidth - 3) . '...'
+            : $item['language'];
+
+        printf("%-{$nameWidth}s | %-{$visWidth}s | %-{$langWidth}s | %{$starsWidth}d | %{$forksWidth}d | %{$issuesWidth}d | %-{$updatedWidth}s | %-{$descWidth}s\n",
+            $name,
+            $item['private'],
+            $lang,
+            $item['stars'],
+            $item['forks'],
+            $item['openIssues'],
+            $item['updated'],
+            $desc
+        );
+    }
+
+    echo str_repeat("-", 140) . "\n";
+    echo "Total repositories: " . count($responseItems) . "\n\n";
+}

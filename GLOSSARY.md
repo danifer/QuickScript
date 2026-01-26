@@ -65,6 +65,15 @@ Categories to consider:
 - **get_holdings** - Retrieve current stock holdings with market data
 - **get_snapshot** - Get real-time market snapshot for a stock symbol
 
+## GitHub API (api_github/)
+- **compare_commits** - Compare commits between two branches or refs
+- **get_commit_details** - Retrieve detailed information about a specific commit
+- **get_commits** - List commits for a repository with filtering options
+- **get_pr_commits** - List all commits in a pull request
+- **get_repo_details** - Get detailed information about a repository
+- **list_pinned_repos** - List pinned repositories for a user or organization
+- **list_repos** - List all repositories for a user or organization
+
 ## Git Utilities (git/)
 - **code_ownership** - Analyze code ownership by author
 - **list_branch_merges** - List recent merge commits on a branch
@@ -72,4 +81,4 @@ Categories to consider:
 
 ---
 
-*Last updated: 2025-12-01*
+*Last updated: 2026-01-26*

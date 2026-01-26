@@ -1,0 +1,192 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://docs.github.com/en/graphql/reference/objects#pinnableitem
+
+$options = getopt('', [
+    'owner:',
+    'format:',
+    'token:'
+]);
+
+$token = $options['token'] ?? getenv('GITHUB_TOKEN');
+$format = $options['format'] ?? 'table';
+$owner = $options['owner'] ?? null;
+
+$allowedFormats = ['json', 'table'];
+
+if (empty($token)) {
+    echo "No GITHUB_TOKEN supplied.\n";
+    exit(1);
+}
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (empty($owner)) {
+    echo "Usage: {$argv[0]} --owner=OWNER [options]\n";
+    echo "Required:\n";
+    echo "  --owner=OWNER           Username or organization\n";
+    echo "Optional:\n";
+    echo "  --format=FORMAT         Output format: json, table (default: table)\n";
+    echo "Example: {$argv[0]} --owner=torvalds\n";
+    exit(1);
+}
+
+// GraphQL query for pinned repositories
+$query = <<<GRAPHQL
+query {
+  repositoryOwner(login: "$owner") {
+    ... on User {
+      pinnedItems(first: 6, types: REPOSITORY) {
+        nodes {
+          ... on Repository {
+            name
+            description
+            url
+            isPrivate
+            primaryLanguage {
+              name
+            }
+            stargazerCount
+            forkCount
+            updatedAt
+          }
+        }
+      }
+    }
+    ... on Organization {
+      pinnedItems(first: 6, types: REPOSITORY) {
+        nodes {
+          ... on Repository {
+            name
+            description
+            url
+            isPrivate
+            primaryLanguage {
+              name
+            }
+            stargazerCount
+            forkCount
+            updatedAt
+          }
+        }
+      }
+    }
+  }
+}
+GRAPHQL;
+
+$data = json_encode(['query' => $query]);
+
+// Initialize cURL session for GraphQL
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://api.github.com/graphql");
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Content-Type: application/json",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$apiResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$apiResponse}\n";
+    exit(1);
+}
+
+// Decode the JSON response
+$response = json_decode($apiResponse, true);
+
+if (isset($response['errors'])) {
+    echo "GraphQL Error: " . json_encode($response['errors'], JSON_PRETTY_PRINT) . "\n";
+    exit(1);
+}
+
+if (!isset($response['data']['repositoryOwner']['pinnedItems']['nodes'])) {
+    echo "No pinned repositories found or user/org does not exist.\n";
+    exit(0);
+}
+
+$pinnedRepos = $response['data']['repositoryOwner']['pinnedItems']['nodes'];
+
+if (empty($pinnedRepos)) {
+    echo "No pinned repositories found for {$owner}.\n";
+    exit(0);
+}
+
+$responseItems = [];
+foreach ($pinnedRepos as $repo) {
+    $responseItems[] = [
+        'name' => $repo['name'],
+        'visibility' => $repo['isPrivate'] ? 'private' : 'public',
+        'description' => $repo['description'] ?? '',
+        'language' => $repo['primaryLanguage']['name'] ?? 'N/A',
+        'stars' => $repo['stargazerCount'],
+        'forks' => $repo['forkCount'],
+        'updated' => date('Y-m-d H:i', strtotime($repo['updatedAt'])),
+        'url' => $repo['url'],
+    ];
+}
+
+if ($format === 'json') {
+    echo json_encode($responseItems, JSON_PRETTY_PRINT);
+    exit(0);
+}
+
+if ($format === 'table') {
+    echo "\n";
+    echo "Pinned Repositories for: {$owner}\n";
+    echo str_repeat("-", 130) . "\n";
+
+    $nameWidth = 25;
+    $visWidth = 7;
+    $langWidth = 12;
+    $starsWidth = 6;
+    $forksWidth = 6;
+    $updatedWidth = 16;
+    $descWidth = 50;
+
+    printf("%-{$nameWidth}s | %-{$visWidth}s | %-{$langWidth}s | %-{$starsWidth}s | %-{$forksWidth}s | %-{$updatedWidth}s | %-{$descWidth}s\n",
+        'Name', 'Vis', 'Language', 'Stars', 'Forks', 'Updated', 'Description');
+    echo str_repeat("-", 130) . "\n";
+
+    foreach ($responseItems as $item) {
+        $name = strlen($item['name']) > $nameWidth
+            ? substr($item['name'], 0, $nameWidth - 3) . '...'
+            : $item['name'];
+        $desc = strlen($item['description']) > $descWidth
+            ? substr($item['description'], 0, $descWidth - 3) . '...'
+            : $item['description'];
+        $lang = strlen($item['language']) > $langWidth
+            ? substr($item['language'], 0, $langWidth - 3) . '...'
+            : $item['language'];
+
+        printf("%-{$nameWidth}s | %-{$visWidth}s | %-{$langWidth}s | %{$starsWidth}d | %{$forksWidth}d | %-{$updatedWidth}s | %-{$descWidth}s\n",
+            $name,
+            $item['visibility'],
+            $lang,
+            $item['stars'],
+            $item['forks'],
+            $item['updated'],
+            $desc
+        );
+    }
+
+    echo str_repeat("-", 130) . "\n";
+    echo "Total pinned repositories: " . count($responseItems) . "\n\n";
+}
