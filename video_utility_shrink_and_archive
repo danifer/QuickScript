@@ -35,14 +35,34 @@ check_command() {
 }
 
 check_command ffmpeg
-check_command tar
-check_command gzip
+
+# Parse command line flags
+archive=false
+while getopts "a" opt; do
+    case $opt in
+        a)
+            archive=true
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND-1))
 
 # Check if a file was provided
 if [ $# -eq 0 ]; then
     echo "Error: No input file provided."
-    echo "Usage: $0 <input-file.mov>"
+    echo "Usage: $0 [-a] <input-file.mov>"
+    echo "  -a: Create tar.gz archive and remove MP4 file"
     exit 1
+fi
+
+# Check for tar and gzip if archive flag is set
+if [ "$archive" = true ]; then
+    check_command tar
+    check_command gzip
 fi
 
 # Get the input file
@@ -96,34 +116,40 @@ ffmpeg -i "$input_file" -vcodec libx264 -crf 24 "$output_file"
 # Check if the conversion was successful
 if [ $? -eq 0 ]; then
     echo "Conversion successful: $output_file"
-    
+
     # Get the output file size
     output_size=$(get_file_size "$output_file")
     echo "Output file size: $output_size"
-    
-    # Create tar.gz file
-    echo "Creating tar.gz archive: $tar_file"
-    tar -czf "$tar_file" -C "$(dirname "$output_file")" "$(basename "$output_file")"
-    
-    if [ $? -eq 0 ]; then
-        # Get the tar.gz file size
-        tar_size=$(get_file_size "$tar_file")
-        echo "Archive file size: $tar_size"
-        
-        # Remove the MP4 file
-        echo "Removing intermediate MP4 file..."
-        rm "$output_file"
-        
+
+    # Create tar.gz archive if archive flag is set
+    if [ "$archive" = true ]; then
+        # Create tar.gz file
+        echo "Creating tar.gz archive: $tar_file"
+        tar -czf "$tar_file" -C "$(dirname "$output_file")" "$(basename "$output_file")"
+
         if [ $? -eq 0 ]; then
-            echo "Process complete!"
-            echo "Input: $input_file ($input_size) → Output: $tar_file ($tar_size)"
+            # Get the tar.gz file size
+            tar_size=$(get_file_size "$tar_file")
+            echo "Archive file size: $tar_size"
+
+            # Remove the MP4 file
+            echo "Removing intermediate MP4 file..."
+            rm "$output_file"
+
+            if [ $? -eq 0 ]; then
+                echo "Process complete!"
+                echo "Input: $input_file ($input_size) → Output: $tar_file ($tar_size)"
+            else
+                echo "Warning: Could not remove the MP4 file."
+                echo "Process completed with tar.gz archive created, but MP4 file remains."
+            fi
         else
-            echo "Warning: Could not remove the MP4 file."
-            echo "Process completed with tar.gz archive created, but MP4 file remains."
+            echo "Error: Failed to create tar.gz archive."
+            echo "MP4 file remains at: $output_file"
         fi
     else
-        echo "Error: Failed to create tar.gz archive."
-        echo "MP4 file remains at: $output_file"
+        echo "Process complete!"
+        echo "Input: $input_file ($input_size) → Output: $output_file ($output_size)"
     fi
 else
     echo "Error: Conversion failed."
