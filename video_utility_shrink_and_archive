@@ -3,16 +3,16 @@
 # Function to get human-readable file size
 get_file_size() {
     local file="$1"
-    
+
     # Get file size in bytes
     local size_bytes=$(stat -f "%z" "$file" 2>/dev/null || stat -c "%s" "$file" 2>/dev/null)
-    
+
     # Check if stat command was successful
     if [ -z "$size_bytes" ]; then
         echo "Unknown"
         return
     fi
-    
+
     # Convert to human-readable format
     if [ $size_bytes -ge 1073741824 ]; then
         echo "$(printf "%.2f" $(echo "$size_bytes/1073741824" | bc -l)) GB"
@@ -34,17 +34,42 @@ check_command() {
     fi
 }
 
-check_command ffmpeg
+show_usage() {
+    echo "Usage: $(basename $0) [-a] [-d] [-h] <file> [file2 ...] [*.ext ...]"
+    echo ""
+    echo "Convert video files to MP4 using H.264 (libx264, CRF 24)."
+    echo "Accepts one or more file paths or glob patterns (e.g. *.mov)."
+    echo ""
+    echo "Options:"
+    echo "  -a    After conversion, package the MP4 into a tar.gz archive"
+    echo "        and remove the intermediate MP4"
+    echo "  -d    Delete the source file after successful conversion"
+    echo "  -h    Show this help message and exit"
+    echo ""
+    echo "Examples:"
+    echo "  $(basename $0) recording.mov"
+    echo "  $(basename $0) -d *.mov"
+    echo "  $(basename $0) -a -d clip1.avi clip2.mkv"
+}
 
 # Parse command line flags
 archive=false
-while getopts "a" opt; do
+delete_source=false
+while getopts "adh" opt; do
     case $opt in
         a)
             archive=true
             ;;
+        d)
+            delete_source=true
+            ;;
+        h)
+            show_usage
+            exit 0
+            ;;
         \?)
             echo "Invalid option: -$OPTARG" >&2
+            echo "Run '$(basename $0) -h' for usage." >&2
             exit 1
             ;;
     esac
@@ -53,11 +78,11 @@ shift $((OPTIND-1))
 
 # Check if a file was provided
 if [ $# -eq 0 ]; then
-    echo "Error: No input file provided."
-    echo "Usage: $0 [-a] <input-file.mov>"
-    echo "  -a: Create tar.gz archive and remove MP4 file"
+    show_usage
     exit 1
 fi
+
+check_command ffmpeg
 
 # Check for tar and gzip if archive flag is set
 if [ "$archive" = true ]; then
@@ -65,92 +90,126 @@ if [ "$archive" = true ]; then
     check_command gzip
 fi
 
-# Get the input file
-input_file="$1"
-
-# Check if the input file exists
-if [ ! -f "$input_file" ]; then
-    echo "Error: File '$input_file' does not exist."
-    exit 1
-fi
-
-# Get the input file size
-input_size=$(get_file_size "$input_file")
-echo "Input file size: $input_size"
-
 # List of common video extensions
 video_extensions=("mov" "mp4" "avi" "mkv" "wmv" "flv" "webm" "m4v" "3gp" "mpg" "mpeg")
 
-# Extract the file extension
-file_extension="${input_file##*.}"
-file_extension="${file_extension,,}" # Convert to lowercase
+process_file() {
+    local input_file="$1"
 
-# Check if the input file has a known video extension
-is_video_ext=false
-for ext in "${video_extensions[@]}"; do
-    if [[ "$file_extension" == "$ext" ]]; then
-        is_video_ext=true
-        break
+    # Check if the input file exists
+    if [ ! -f "$input_file" ]; then
+        echo "Error: File '$input_file' does not exist. Skipping."
+        return 1
+    fi
+
+    # Get the input file size
+    local input_size=$(get_file_size "$input_file")
+    echo ""
+    echo "Processing: $input_file ($input_size)"
+
+    # Extract the file extension
+    local file_extension
+    file_extension=$(echo "${input_file##*.}" | tr '[:upper:]' '[:lower:]')
+
+    # Check if the input file has a known video extension
+    local is_video_ext=false
+    for ext in "${video_extensions[@]}"; do
+        if [[ "$file_extension" == "$ext" ]]; then
+            is_video_ext=true
+            break
+        fi
+    done
+
+    if [[ "$is_video_ext" == false ]]; then
+        echo "Warning: '$input_file' does not have a common video extension."
+        echo "Known video extensions: ${video_extensions[*]}"
+        read -p "Continue anyway? (y/n): " continue_anyway
+        if [[ ! "$continue_anyway" =~ ^[Yy]$ ]]; then
+            echo "Skipping '$input_file'."
+            return 1
+        fi
+    fi
+
+    # Create output filename by replacing the original extension with .mp4
+    local output_file="${input_file%.*}.mp4"
+    # Create tar.gz filename
+    local tar_file="${input_file%.*}.tar.gz"
+
+    # Avoid overwriting the input file if it is already an MP4
+    if [ "$output_file" = "$input_file" ]; then
+        echo "Error: Input file is already an MP4. Skipping '$input_file'."
+        return 1
+    fi
+
+    echo "Converting '$input_file' to '$output_file'..."
+
+    # Run the ffmpeg command
+    ffmpeg -i "$input_file" -vcodec libx264 -crf 24 -vsync vfr "$output_file"
+
+    # Check if the conversion was successful
+    if [ $? -eq 0 ]; then
+        echo "Conversion successful: $output_file"
+
+        # Get the output file size
+        local output_size=$(get_file_size "$output_file")
+        echo "Output file size: $output_size"
+
+        local final_output="$output_file"
+        local final_size="$output_size"
+
+        # Create tar.gz archive if archive flag is set
+        if [ "$archive" = true ]; then
+            echo "Creating tar.gz archive: $tar_file"
+            tar -czf "$tar_file" -C "$(dirname "$output_file")" "$(basename "$output_file")"
+
+            if [ $? -eq 0 ]; then
+                local tar_size=$(get_file_size "$tar_file")
+                echo "Archive file size: $tar_size"
+
+                echo "Removing intermediate MP4 file..."
+                rm "$output_file"
+
+                if [ $? -ne 0 ]; then
+                    echo "Warning: Could not remove the MP4 file."
+                fi
+
+                final_output="$tar_file"
+                final_size="$tar_size"
+            else
+                echo "Error: Failed to create tar.gz archive."
+                echo "MP4 file remains at: $output_file"
+                return 1
+            fi
+        fi
+
+        # Delete source file if delete flag is set
+        if [ "$delete_source" = true ]; then
+            echo "Deleting source file '$input_file'..."
+            rm "$input_file"
+            if [ $? -ne 0 ]; then
+                echo "Warning: Could not delete source file '$input_file'."
+            fi
+        fi
+
+        echo "Done: $input_file ($input_size) -> $final_output ($final_size)"
+    else
+        echo "Error: Conversion failed for '$input_file'."
+        return 1
+    fi
+}
+
+# Collect files, expanding any glob patterns passed as quoted strings
+files=()
+for arg in "$@"; do
+    matches=($arg)
+    if [ ${#matches[@]} -eq 0 ] || [ ! -e "${matches[0]}" ]; then
+        # No matches - pass through as-is so process_file can report the error
+        files+=("$arg")
+    else
+        files+=("${matches[@]}")
     fi
 done
 
-if [[ "$is_video_ext" == false ]]; then
-    echo "Warning: Input file does not have a common video extension."
-    echo "Known video extensions: ${video_extensions[*]}"
-    read -p "Continue anyway? (y/n): " continue_anyway
-    if [[ ! "$continue_anyway" =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
-
-# Create output filename by replacing the original extension with .mp4
-output_file="${input_file%.*}.mp4"
-# Create tar.gz filename
-tar_file="${input_file%.*}.tar.gz"
-
-echo "Converting '$input_file' to '$output_file'..."
-
-# Run the ffmpeg command
-ffmpeg -i "$input_file" -vcodec libx264 -crf 24 "$output_file"
-
-# Check if the conversion was successful
-if [ $? -eq 0 ]; then
-    echo "Conversion successful: $output_file"
-
-    # Get the output file size
-    output_size=$(get_file_size "$output_file")
-    echo "Output file size: $output_size"
-
-    # Create tar.gz archive if archive flag is set
-    if [ "$archive" = true ]; then
-        # Create tar.gz file
-        echo "Creating tar.gz archive: $tar_file"
-        tar -czf "$tar_file" -C "$(dirname "$output_file")" "$(basename "$output_file")"
-
-        if [ $? -eq 0 ]; then
-            # Get the tar.gz file size
-            tar_size=$(get_file_size "$tar_file")
-            echo "Archive file size: $tar_size"
-
-            # Remove the MP4 file
-            echo "Removing intermediate MP4 file..."
-            rm "$output_file"
-
-            if [ $? -eq 0 ]; then
-                echo "Process complete!"
-                echo "Input: $input_file ($input_size) → Output: $tar_file ($tar_size)"
-            else
-                echo "Warning: Could not remove the MP4 file."
-                echo "Process completed with tar.gz archive created, but MP4 file remains."
-            fi
-        else
-            echo "Error: Failed to create tar.gz archive."
-            echo "MP4 file remains at: $output_file"
-        fi
-    else
-        echo "Process complete!"
-        echo "Input: $input_file ($input_size) → Output: $output_file ($output_size)"
-    fi
-else
-    echo "Error: Conversion failed."
-fi
+for input_file in "${files[@]}"; do
+    process_file "$input_file"
+done
