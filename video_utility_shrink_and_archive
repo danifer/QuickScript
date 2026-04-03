@@ -37,7 +37,7 @@ check_command() {
 show_usage() {
     echo "Usage: $(basename $0) [-a] [-d] [-h] <file> [file2 ...] [*.ext ...]"
     echo ""
-    echo "Convert video files to MP4 using H.264 (libx264, CRF 24)."
+    echo "Convert video files to MP4 using H.264 (libx264, CRF 28, AAC 128k)."
     echo "Accepts one or more file paths or glob patterns (e.g. *.mov)."
     echo ""
     echo "Options:"
@@ -143,8 +143,16 @@ process_file() {
 
     echo "Converting '$input_file' to '$output_file'..."
 
+    # Wait until the file is no longer held open (e.g. still being recorded)
+    # Checks every 5 seconds for up to 10 minutes.
+    sleep 2
+    for i in $(seq 1 120); do
+        lsof "$input_file" > /dev/null 2>&1 || break
+        sleep 5
+    done
+
     # Run the ffmpeg command
-    ffmpeg -i "$input_file" -vcodec libx264 -crf 24 -vsync vfr "$output_file"
+    ffmpeg -nostdin -i "$input_file" -c:v libx264 -crf 28 -preset medium -c:a aac -b:a 128k -vsync vfr -y "$output_file"
 
     # Check if the conversion was successful
     if [ $? -eq 0 ]; then
