@@ -4,6 +4,7 @@
 # Documentation: https://docs.github.com/en/rest/commits/commits
 
 $options = getopt('', [
+    'url:',
     'repo:',
     'owner:',
     'branch:',
@@ -15,7 +16,6 @@ $options = getopt('', [
     'token:'
 ]);
 
-$token = $options['token'] ?? getenv('GITHUB_TOKEN');
 $format = $options['format'] ?? 'table';
 $repo = $options['repo'] ?? null;
 $owner = $options['owner'] ?? null;
@@ -25,10 +25,41 @@ $until = $options['until'] ?? null;
 $author = $options['author'] ?? null;
 $limit = $options['limit'] ?? 30;
 
+// Accept URL as positional arg or --url option
+$urlArg = $options['url'] ?? null;
+if (!$urlArg) {
+    foreach (array_slice($argv, 1) as $arg) {
+        if (strncmp($arg, 'https://github.com/', 19) === 0) {
+            $urlArg = $arg;
+            break;
+        }
+    }
+}
+if ($urlArg) {
+    // https://github.com/OWNER/REPO[/tree/BRANCH]
+    if (preg_match('!github\.com/([^/]+)/([^/?#]+)(?:/tree/([^/?#]+))?!', $urlArg, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+        if (!empty($m[3])) {
+            $branch = $branch ?? $m[3];
+        }
+    } else {
+        echo "Could not parse GitHub URL. Expected: https://github.com/OWNER/REPO\n";
+        exit(1);
+    }
+}
+
+// Token resolution: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
+$token = $options['token'] ?? null;
+if (!$token) {
+    $ownerEnvKey = strtoupper($owner ?? '') . '_GITHUB_PERSONAL_ACCESS_TOKEN';
+    $token = getenv($ownerEnvKey) ?: getenv('GITHUB_PERSONAL_ACCESS_TOKEN') ?: getenv('GITHUB_TOKEN');
+}
+
 $allowedFormats = ['json', 'csv', 'table'];
 
 if (empty($token)) {
-    echo "No GITHUB_TOKEN supplied.\n";
+    echo "No token supplied. Set GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, or use --token.\n";
     exit(1);
 }
 
@@ -38,10 +69,8 @@ if (!in_array($format, $allowedFormats)) {
 }
 
 if (empty($repo) || empty($owner)) {
-    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO [options]\n";
-    echo "Required:\n";
-    echo "  --owner=OWNER           Repository owner\n";
-    echo "  --repo=REPO             Repository name\n";
+    echo "Usage: {$argv[0]} https://github.com/OWNER/REPO [options]\n";
+    echo "   or: {$argv[0]} --owner=OWNER --repo=REPO [options]\n";
     echo "Optional:\n";
     echo "  --branch=BRANCH         Branch name (default: default branch)\n";
     echo "  --since=YYYY-MM-DD      Show commits after this date\n";
@@ -49,7 +78,8 @@ if (empty($repo) || empty($owner)) {
     echo "  --author=AUTHOR         Filter by commit author\n";
     echo "  --limit=N               Number of commits to fetch (default: 30)\n";
     echo "  --format=FORMAT         Output format: json, csv, table (default: table)\n";
-    echo "Example: {$argv[0]} --owner=anthropics --repo=claude-code --limit=10\n";
+    echo "Example: {$argv[0]} https://github.com/anthropics/claude-code --limit=10\n";
+
     exit(1);
 }
 

@@ -4,6 +4,7 @@
 # Documentation: https://docs.github.com/en/rest/commits/commits#get-a-commit
 
 $options = getopt('', [
+    'url:',
     'repo:',
     'owner:',
     'sha:',
@@ -11,16 +12,44 @@ $options = getopt('', [
     'token:'
 ]);
 
-$token = $options['token'] ?? getenv('GITHUB_TOKEN');
 $format = $options['format'] ?? 'json';
 $repo = $options['repo'] ?? null;
 $owner = $options['owner'] ?? null;
 $sha = $options['sha'] ?? null;
 
+// Accept URL as positional arg or --url option
+$urlArg = $options['url'] ?? null;
+if (!$urlArg) {
+    foreach (array_slice($argv, 1) as $arg) {
+        if (strncmp($arg, 'https://github.com/', 19) === 0) {
+            $urlArg = $arg;
+            break;
+        }
+    }
+}
+if ($urlArg) {
+    // https://github.com/OWNER/REPO/commit/SHA
+    if (preg_match('!github\.com/([^/]+)/([^/]+)/commit/([0-9a-f]+)!', $urlArg, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+        $sha = $sha ?? $m[3];
+    } else {
+        echo "Could not parse GitHub commit URL. Expected: https://github.com/OWNER/REPO/commit/SHA\n";
+        exit(1);
+    }
+}
+
+// Token resolution: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
+$token = $options['token'] ?? null;
+if (!$token) {
+    $ownerEnvKey = strtoupper($owner ?? '') . '_GITHUB_PERSONAL_ACCESS_TOKEN';
+    $token = getenv($ownerEnvKey) ?: getenv('GITHUB_PERSONAL_ACCESS_TOKEN') ?: getenv('GITHUB_TOKEN');
+}
+
 $allowedFormats = ['json', 'table'];
 
 if (empty($token)) {
-    echo "No GITHUB_TOKEN supplied.\n";
+    echo "No token supplied. Set GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, or use --token.\n";
     exit(1);
 }
 
@@ -30,14 +59,11 @@ if (!in_array($format, $allowedFormats)) {
 }
 
 if (empty($repo) || empty($owner) || empty($sha)) {
-    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO --sha=COMMIT_SHA\n";
-    echo "Required:\n";
-    echo "  --owner=OWNER           Repository owner\n";
-    echo "  --repo=REPO             Repository name\n";
-    echo "  --sha=SHA               Commit SHA (full or short)\n";
+    echo "Usage: {$argv[0]} https://github.com/OWNER/REPO/commit/SHA\n";
+    echo "   or: {$argv[0]} --owner=OWNER --repo=REPO --sha=COMMIT_SHA\n";
     echo "Optional:\n";
     echo "  --format=FORMAT         Output format: json, table (default: json)\n";
-    echo "Example: {$argv[0]} --owner=anthropics --repo=claude-code --sha=abc123\n";
+    echo "Example: {$argv[0]} https://github.com/anthropics/claude-code/commit/abc123\n";
     exit(1);
 }
 

@@ -23,8 +23,8 @@ VULTR_RESPONSE=$(
   #   -H "Authorization: Bearer ${VULTR_API_KEY}" \
   #   -H "Content-Type: applicatiofn/json" \
   #   --data '{
-  #     "ip" : "45.76.59.74",
-  #     "reverse" : "dfw7.danifer.com"
+  #     "ip" : "YOUR_IP",
+  #     "reverse" : "YOUR_REVERSE_DNS"
   #   }'
 
   ## GET - ipv4 data for specific instance

@@ -1,0 +1,234 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation:
+#   https://docs.github.com/en/rest/pulls/comments#get-a-review-comment-for-a-pull-request
+#   https://docs.github.com/en/rest/pulls/reviews#get-a-review-for-a-pull-request
+#   https://docs.github.com/en/rest/issues/comments#get-an-issue-comment
+
+$options = getopt('', [
+    'url:',
+    'owner:',
+    'repo:',
+    'pr:',
+    'comment:',
+    'format:',
+    'token:'
+]);
+
+$format = $options['format'] ?? 'table';
+$allowedFormats = ['json', 'table'];
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+// Parse --url if provided, or accept URL as positional arg
+$owner = $options['owner'] ?? null;
+$repo = $options['repo'] ?? null;
+$prNumber = $options['pr'] ?? null;
+$commentId = $options['comment'] ?? null;
+$commentType = 'review_comment'; // default
+
+$urlArg = $options['url'] ?? null;
+if (!$urlArg) {
+    foreach (array_slice($argv, 1) as $arg) {
+        if (strncmp($arg, 'https://github.com/', 19) === 0) {
+            $urlArg = $arg;
+            break;
+        }
+    }
+}
+
+if (!empty($urlArg)) {
+    $url = $urlArg;
+    if (preg_match('!github\.com/([^/]+)/([^/]+)/pull/(\d+)#discussion_r(\d+)!', $url, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+        $prNumber = $prNumber ?? $m[3];
+        $commentId = $commentId ?? $m[4];
+        $commentType = 'review_comment';
+    } elseif (preg_match('!github\.com/([^/]+)/([^/]+)/pull/(\d+)#pullrequestreview-(\d+)!', $url, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+        $prNumber = $prNumber ?? $m[3];
+        $commentId = $commentId ?? $m[4];
+        $commentType = 'review';
+    } elseif (preg_match('!github\.com/([^/]+)/([^/]+)/(?:pull|issues)/(\d+)#issuecomment-(\d+)!', $url, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+        $prNumber = $prNumber ?? $m[3];
+        $commentId = $commentId ?? $m[4];
+        $commentType = 'issue_comment';
+    } elseif (preg_match('!github\.com/([^/]+)/([^/]+)/commit/[0-9a-f]+#commitcomment-(\d+)!', $url, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+        $commentId = $commentId ?? $m[3];
+        $commentType = 'commit_comment';
+    } else {
+        echo "Could not parse GitHub comment URL. Supported formats:\n";
+        echo "  https://github.com/OWNER/REPO/pull/NUMBER#discussion_rID\n";
+        echo "  https://github.com/OWNER/REPO/pull/NUMBER#pullrequestreview-ID\n";
+        echo "  https://github.com/OWNER/REPO/pull/NUMBER#issuecomment-ID\n";
+        echo "  https://github.com/OWNER/REPO/commit/SHA#commitcomment-ID\n";
+        exit(1);
+    }
+}
+
+if (empty($owner) || empty($repo) || empty($commentId)) {
+    echo "Usage: {$argv[0]} URL\n";
+    echo "   or: {$argv[0]} --owner=OWNER --repo=REPO --comment=COMMENT_ID\n";
+    echo "Supported URL formats:\n";
+    echo "  https://github.com/OWNER/REPO/pull/NUMBER#discussion_rID\n";
+    echo "  https://github.com/OWNER/REPO/pull/NUMBER#pullrequestreview-ID\n";
+    echo "  https://github.com/OWNER/REPO/pull/NUMBER#issuecomment-ID\n";
+    echo "  https://github.com/OWNER/REPO/commit/SHA#commitcomment-ID\n";
+    echo "Optional:\n";
+    echo "  --format=FORMAT         Output format: json, table (default: table)\n";
+    echo "  --token=TOKEN           GitHub token (overrides env vars)\n";
+    exit(1);
+}
+
+// Resolve token: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
+$ownerEnvKey = strtoupper($owner) . '_GITHUB_PERSONAL_ACCESS_TOKEN';
+$token = $options['token']
+    ?? getenv($ownerEnvKey)
+    ?: getenv('GITHUB_PERSONAL_ACCESS_TOKEN')
+    ?: getenv('GITHUB_TOKEN');
+
+if (empty($token)) {
+    echo "No token supplied. Set {$ownerEnvKey}, GITHUB_PERSONAL_ACCESS_TOKEN, or GITHUB_TOKEN, or use --token.\n";
+    exit(1);
+}
+
+if ($commentType === 'review_comment') {
+    $apiUrl = "https://api.github.com/repos/{$owner}/{$repo}/pulls/comments/{$commentId}";
+} elseif ($commentType === 'review') {
+    if (empty($prNumber)) {
+        echo "PR number is required for review URLs. Use a full GitHub URL.\n";
+        exit(1);
+    }
+    $apiUrl = "https://api.github.com/repos/{$owner}/{$repo}/pulls/{$prNumber}/reviews/{$commentId}";
+} elseif ($commentType === 'issue_comment') {
+    $apiUrl = "https://api.github.com/repos/{$owner}/{$repo}/issues/comments/{$commentId}";
+} else {
+    $apiUrl = "https://api.github.com/repos/{$owner}/{$repo}/comments/{$commentId}";
+}
+
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, $apiUrl);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    "Authorization: Bearer {$token}",
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: PHP-GitHub-Client"
+]);
+
+$response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+if (curl_errno($ch)) {
+    echo "cURL Error: " . curl_error($ch) . "\n";
+    curl_close($ch);
+    exit(1);
+}
+
+curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP {$httpCode}): {$response}\n";
+    exit(1);
+}
+
+$comment = json_decode($response, true);
+
+if ($format === 'json') {
+    echo json_encode($comment, JSON_PRETTY_PRINT) . "\n";
+    exit(0);
+}
+
+// table format
+$divider = str_repeat('-', 100);
+
+echo "\n";
+
+if ($commentType === 'review_comment') {
+    echo "PR Review Comment #{$comment['id']}\n";
+    echo $divider . "\n";
+    echo "Author:   {$comment['user']['login']}\n";
+    echo "Created:  " . date('Y-m-d H:i', strtotime($comment['created_at'])) . "\n";
+    if ($comment['created_at'] !== $comment['updated_at']) {
+        echo "Updated:  " . date('Y-m-d H:i', strtotime($comment['updated_at'])) . "\n";
+    }
+    echo "File:     {$comment['path']}\n";
+    if (!empty($comment['line'])) {
+        echo "Line:     {$comment['line']}\n";
+    }
+    echo "URL:      {$comment['html_url']}\n";
+    echo $divider . "\n";
+    if (!empty($comment['diff_hunk'])) {
+        echo "Diff hunk:\n";
+        echo $comment['diff_hunk'] . "\n";
+        echo $divider . "\n";
+    }
+    echo "Comment:\n";
+    echo $comment['body'] . "\n";
+    echo $divider . "\n";
+
+} elseif ($commentType === 'review') {
+    $stateLabel = match(strtoupper($comment['state'] ?? '')) {
+        'APPROVED' => 'Approved',
+        'CHANGES_REQUESTED' => 'Changes requested',
+        'COMMENTED' => 'Commented',
+        'DISMISSED' => 'Dismissed',
+        default => $comment['state'] ?? 'Unknown'
+    };
+    echo "PR Review #{$comment['id']}\n";
+    echo $divider . "\n";
+    echo "Author:   {$comment['user']['login']}\n";
+    echo "State:    {$stateLabel}\n";
+    echo "Submitted:" . date('Y-m-d H:i', strtotime($comment['submitted_at'])) . "\n";
+    echo "Commit:   " . substr($comment['commit_id'], 0, 7) . "\n";
+    echo "URL:      {$comment['html_url']}\n";
+    echo $divider . "\n";
+    echo "Comment:\n";
+    echo ($comment['body'] !== '' ? $comment['body'] : '(no body)') . "\n";
+    echo $divider . "\n";
+
+} elseif ($commentType === 'issue_comment') {
+    echo "PR Issue Comment #{$comment['id']}\n";
+    echo $divider . "\n";
+    echo "Author:   {$comment['user']['login']}\n";
+    echo "Created:  " . date('Y-m-d H:i', strtotime($comment['created_at'])) . "\n";
+    if ($comment['created_at'] !== $comment['updated_at']) {
+        echo "Updated:  " . date('Y-m-d H:i', strtotime($comment['updated_at'])) . "\n";
+    }
+    echo "URL:      {$comment['html_url']}\n";
+    echo $divider . "\n";
+    echo "Comment:\n";
+    echo $comment['body'] . "\n";
+    echo $divider . "\n";
+
+} else {
+    echo "Commit Comment #{$comment['id']}\n";
+    echo $divider . "\n";
+    echo "Author:   {$comment['user']['login']}\n";
+    echo "Created:  " . date('Y-m-d H:i', strtotime($comment['created_at'])) . "\n";
+    if ($comment['created_at'] !== $comment['updated_at']) {
+        echo "Updated:  " . date('Y-m-d H:i', strtotime($comment['updated_at'])) . "\n";
+    }
+    echo "Commit:   " . substr($comment['commit_id'], 0, 7) . "\n";
+    if (!empty($comment['path'])) {
+        echo "File:     {$comment['path']}\n";
+    }
+    if (!empty($comment['line'])) {
+        echo "Line:     {$comment['line']}\n";
+    }
+    echo "URL:      {$comment['html_url']}\n";
+    echo $divider . "\n";
+    echo "Comment:\n";
+    echo $comment['body'] . "\n";
+    echo $divider . "\n";
+}

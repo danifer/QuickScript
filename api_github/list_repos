@@ -4,6 +4,7 @@
 # Documentation: https://docs.github.com/en/rest/repos/repos#list-repositories-for-a-user
 
 $options = getopt('', [
+    'url:',
     'owner:',
     'type:',
     'sort:',
@@ -12,19 +13,45 @@ $options = getopt('', [
     'token:'
 ]);
 
-$token = $options['token'] ?? getenv('GITHUB_TOKEN');
 $format = $options['format'] ?? 'table';
 $owner = $options['owner'] ?? null;
 $type = $options['type'] ?? 'all';
 $sort = $options['sort'] ?? 'updated';
 $limit = $options['limit'] ?? 100;
 
+// Accept URL as positional arg or --url option
+$urlArg = $options['url'] ?? null;
+if (!$urlArg) {
+    foreach (array_slice($argv, 1) as $arg) {
+        if (strncmp($arg, 'https://github.com/', 19) === 0) {
+            $urlArg = $arg;
+            break;
+        }
+    }
+}
+if ($urlArg) {
+    // https://github.com/OWNER
+    if (preg_match('!github\.com/([^/?#]+)!', $urlArg, $m)) {
+        $owner = $owner ?? $m[1];
+    } else {
+        echo "Could not parse GitHub URL. Expected: https://github.com/OWNER\n";
+        exit(1);
+    }
+}
+
+// Token resolution: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
+$token = $options['token'] ?? null;
+if (!$token) {
+    $ownerEnvKey = strtoupper($owner ?? '') . '_GITHUB_PERSONAL_ACCESS_TOKEN';
+    $token = getenv($ownerEnvKey) ?: getenv('GITHUB_PERSONAL_ACCESS_TOKEN') ?: getenv('GITHUB_TOKEN');
+}
+
 $allowedFormats = ['json', 'csv', 'table'];
 $allowedTypes = ['all', 'owner', 'member'];
 $allowedSort = ['created', 'updated', 'pushed', 'full_name'];
 
 if (empty($token)) {
-    echo "No GITHUB_TOKEN supplied.\n";
+    echo "No token supplied. Set GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, or use --token.\n";
     exit(1);
 }
 
@@ -44,15 +71,14 @@ if (!in_array($sort, $allowedSort)) {
 }
 
 if (empty($owner)) {
-    echo "Usage: {$argv[0]} --owner=OWNER [options]\n";
-    echo "Required:\n";
-    echo "  --owner=OWNER           Repository owner (username or organization)\n";
+    echo "Usage: {$argv[0]} https://github.com/OWNER\n";
+    echo "   or: {$argv[0]} --owner=OWNER [options]\n";
     echo "Optional:\n";
     echo "  --type=TYPE             Type: all, owner, member (default: all)\n";
     echo "  --sort=SORT             Sort by: created, updated, pushed, full_name (default: updated)\n";
     echo "  --limit=N               Number of repos to fetch (default: 100)\n";
     echo "  --format=FORMAT         Output format: json, csv, table (default: table)\n";
-    echo "Example: {$argv[0]} --owner=facebook --limit=20\n";
+    echo "Example: {$argv[0]} https://github.com/anthropics --limit=20\n";
     exit(1);
 }
 

@@ -4,21 +4,49 @@
 # Documentation: https://docs.github.com/en/rest/repos/repos#get-a-repository
 
 $options = getopt('', [
+    'url:',
     'repo:',
     'owner:',
     'format:',
     'token:'
 ]);
 
-$token = $options['token'] ?? getenv('GITHUB_TOKEN');
 $format = $options['format'] ?? 'table';
 $repo = $options['repo'] ?? null;
 $owner = $options['owner'] ?? null;
 
+// Accept URL as positional arg or --url option
+$urlArg = $options['url'] ?? null;
+if (!$urlArg) {
+    foreach (array_slice($argv, 1) as $arg) {
+        if (strncmp($arg, 'https://github.com/', 19) === 0) {
+            $urlArg = $arg;
+            break;
+        }
+    }
+}
+if ($urlArg) {
+    // https://github.com/OWNER/REPO
+    if (preg_match('!github\.com/([^/]+)/([^/?#]+)!', $urlArg, $m)) {
+        $owner = $owner ?? $m[1];
+        $repo = $repo ?? $m[2];
+    } else {
+        echo "Could not parse GitHub URL. Expected: https://github.com/OWNER/REPO\n";
+        exit(1);
+    }
+}
+
+// Token resolution: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
+$token = $options['token'] ?? null;
+if (!$token) {
+    $ownerEnvKey = strtoupper($owner ?? '') . '_GITHUB_PERSONAL_ACCESS_TOKEN';
+    $token = getenv($ownerEnvKey) ?: getenv('GITHUB_PERSONAL_ACCESS_TOKEN') ?: getenv('GITHUB_TOKEN');
+}
+
 $allowedFormats = ['json', 'table'];
 
 if (empty($token)) {
-    echo "No GITHUB_TOKEN supplied.\n";
+    echo "No token supplied. Set GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, or use --token.\n";
     exit(1);
 }
 
@@ -28,13 +56,11 @@ if (!in_array($format, $allowedFormats)) {
 }
 
 if (empty($repo) || empty($owner)) {
-    echo "Usage: {$argv[0]} --owner=OWNER --repo=REPO\n";
-    echo "Required:\n";
-    echo "  --owner=OWNER           Repository owner\n";
-    echo "  --repo=REPO             Repository name\n";
+    echo "Usage: {$argv[0]} https://github.com/OWNER/REPO\n";
+    echo "   or: {$argv[0]} --owner=OWNER --repo=REPO\n";
     echo "Optional:\n";
     echo "  --format=FORMAT         Output format: json, table (default: table)\n";
-    echo "Example: {$argv[0]} --owner=facebook --repo=react\n";
+    echo "Example: {$argv[0]} https://github.com/anthropics/claude-code\n";
     exit(1);
 }
 

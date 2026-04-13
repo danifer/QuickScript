@@ -1,0 +1,269 @@
+#!/usr/bin/env php
+<?php
+
+# Documentation: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-item
+
+$options = getopt('', [
+    'url:',
+    'org:',
+    'project:',
+    'id:',
+    'format:',
+    'token:'
+]);
+
+$format = $options['format'] ?? 'table';
+$org = $options['org'] ?? null;
+$project = $options['project'] ?? null;
+$id = $options['id'] ?? null;
+
+// Accept URL as positional arg or --url option
+$urlArg = $options['url'] ?? null;
+if (!$urlArg) {
+    foreach (array_slice($argv, 1) as $arg) {
+        if (strncmp($arg, 'https://dev.azure.com/', 22) === 0) {
+            $urlArg = $arg;
+            break;
+        }
+    }
+}
+if ($urlArg) {
+    if (preg_match('!dev\.azure\.com/([^/]+)/([^/]+)/_workitems/edit/(\d+)!', $urlArg, $m)) {
+        $org = $org ?? $m[1];
+        $project = $project ?? $m[2];
+        $id = $id ?? $m[3];
+    } else {
+        echo "Could not parse Azure DevOps URL. Expected: https://dev.azure.com/ORG/PROJECT/_workitems/edit/ID\n";
+        exit(1);
+    }
+}
+
+// Token resolution: --token > ADO_PAT_WORK_ITEMS_READ
+$token = $options['token'] ?? getenv('ADO_PAT_WORK_ITEMS_READ') ?: null;
+
+$allowedFormats = ['json', 'table'];
+
+if (!in_array($format, $allowedFormats)) {
+    echo sprintf('Invalid format. Valid formats are %s%s', implode(', ', $allowedFormats), PHP_EOL);
+    exit(1);
+}
+
+if (empty($org) || empty($project) || empty($id)) {
+    echo "Usage: {$argv[0]} https://dev.azure.com/ORG/PROJECT/_workitems/edit/ID\n";
+    echo "   or: {$argv[0]} --org=ORG --project=PROJECT --id=ID\n";
+    echo "Optional:\n";
+    echo "  --format=FORMAT   Output format: json, table (default: table)\n";
+    echo "  --token=TOKEN     PAT (overrides ADO_PAT_WORK_ITEMS_READ)\n";
+    exit(1);
+}
+
+if (!ctype_digit($id)) {
+    echo "Error: ID must be numeric.\n";
+    exit(1);
+}
+
+if (empty($token)) {
+    echo "Error: No token supplied. Set ADO_PAT_WORK_ITEMS_READ or use --token.\n";
+    exit(1);
+}
+
+$authHeader = 'Authorization: Basic ' . base64_encode(':' . $token);
+$base = "https://dev.azure.com/$org/$project/_apis";
+$attachmentsDir = getenv('AZURE_ATTACHMENTS_DIR') ?: (getenv('HOME') . "/Downloads/ado-attachments/$id");
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function adoGet(string $url, string $authHeader): array
+{
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        $authHeader,
+        'Content-Type: application/json',
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    if (curl_errno($ch)) {
+        echo "cURL Error: " . curl_error($ch) . "\n";
+        curl_close($ch);
+        exit(1);
+    }
+    curl_close($ch);
+    return [$httpCode, $response];
+}
+
+function adoDownload(string $url, string $authHeader, string $dest): int
+{
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [$authHeader]);
+    $data = curl_exec($ch);
+    if (curl_errno($ch)) {
+        echo "cURL Error: " . curl_error($ch) . "\n";
+        curl_close($ch);
+        exit(1);
+    }
+    curl_close($ch);
+    file_put_contents($dest, $data);
+    return strlen($data);
+}
+
+function field(array $fields, string $key): string
+{
+    $v = $fields[$key] ?? '';
+    if (is_array($v)) {
+        return $v['displayName'] ?? '';
+    }
+    return (string)$v;
+}
+
+function stripHtml(string $s): string
+{
+    $s = html_entity_decode($s, ENT_QUOTES | ENT_HTML5);
+    $s = preg_replace('/<br\s*\/?>/i', "\n", $s);
+    $s = strip_tags($s);
+    return trim($s);
+}
+
+function hr(): void
+{
+    echo str_repeat('-', 72) . "\n";
+}
+
+// ---------------------------------------------------------------------------
+// Fetch work item
+// ---------------------------------------------------------------------------
+[$httpCode, $response] = adoGet("$base/wit/workitems/$id?\$expand=all&api-version=7.1", $authHeader);
+
+if ($httpCode !== 200) {
+    echo "API Error (HTTP $httpCode): $response\n";
+    exit(1);
+}
+
+$item = json_decode($response, true);
+if (empty($item)) {
+    echo "No work item data found.\n";
+    exit(1);
+}
+
+if ($format === 'json') {
+    echo json_encode($item, JSON_PRETTY_PRINT) . "\n";
+    exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Display core fields
+// ---------------------------------------------------------------------------
+$fields = $item['fields'] ?? [];
+
+$createdDate = substr(field($fields, 'System.CreatedDate'), 0, 10);
+$changedDate = substr(field($fields, 'System.ChangedDate'), 0, 10);
+
+echo sprintf("%-14s %s\n", 'ID:', $item['id']);
+echo sprintf("%-14s %s\n", 'Type:', field($fields, 'System.WorkItemType'));
+echo sprintf("%-14s %s\n", 'State:', field($fields, 'System.State'));
+echo sprintf("%-14s %s\n", 'Reason:', field($fields, 'System.Reason'));
+echo sprintf("%-14s %s\n", 'Title:', field($fields, 'System.Title'));
+echo sprintf("%-14s %s\n", 'Assigned To:', field($fields, 'System.AssignedTo'));
+echo sprintf("%-14s %s  (%s)\n", 'Created By:', field($fields, 'System.CreatedBy'), $createdDate);
+echo sprintf("%-14s %s  (%s)\n", 'Changed By:', field($fields, 'System.ChangedBy'), $changedDate);
+echo sprintf("%-14s %s\n", 'Sprint:', field($fields, 'System.IterationPath'));
+echo sprintf("%-14s %s\n", 'Area:', field($fields, 'System.AreaPath'));
+echo sprintf("%-14s %s\n", 'Board Column:', field($fields, 'System.BoardColumn'));
+echo sprintf("%-14s %s\n", 'Priority:', field($fields, 'Microsoft.VSTS.Common.Priority'));
+echo sprintf("%-14s %s\n", 'Value Area:', field($fields, 'Microsoft.VSTS.Common.ValueArea'));
+echo sprintf("%-14s %s\n", 'Tags:', field($fields, 'System.Tags'));
+echo sprintf("%-14s %s\n", 'Comments:', field($fields, 'System.CommentCount'));
+echo "\n";
+
+$desc = stripHtml(field($fields, 'System.Description'));
+if ($desc !== '') {
+    echo '-- Description ' . str_repeat('-', 57) . "\n";
+    echo $desc . "\n\n";
+}
+
+$history = stripHtml(field($fields, 'System.History'));
+if ($history !== '') {
+    echo '-- Latest History ' . str_repeat('-', 54) . "\n";
+    echo $history . "\n\n";
+}
+
+// ---------------------------------------------------------------------------
+// Fetch and display comments
+// ---------------------------------------------------------------------------
+$commentCount = (int)field($fields, 'System.CommentCount');
+if ($commentCount > 0) {
+    [$cHttpCode, $cResponse] = adoGet("$base/wit/workItems/$id/comments?api-version=7.1-preview.3", $authHeader);
+    if ($cHttpCode === 200) {
+        $commentsData = json_decode($cResponse, true);
+        $comments = $commentsData['comments'] ?? [];
+        if (!empty($comments)) {
+            echo '-- Comments ' . str_repeat('-', 60) . "\n";
+            foreach ($comments as $comment) {
+                $author = $comment['createdBy']['displayName'] ?? '';
+                $date = substr($comment['createdDate'] ?? '', 0, 10);
+                $text = stripHtml($comment['text'] ?? '');
+                echo "[$date] $author:\n";
+                echo $text . "\n\n";
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Relations: attachments and linked items
+// ---------------------------------------------------------------------------
+$relations = $item['relations'] ?? [];
+$attachments = [];
+$links = [];
+
+foreach ($relations as $rel) {
+    $relType = $rel['rel'] ?? '';
+    $relUrl = $rel['url'] ?? '';
+    $relName = $rel['attributes']['name'] ?? '';
+    if ($relType === 'AttachedFile') {
+        $attachments[] = ['url' => $relUrl, 'name' => $relName];
+    } elseif ($relUrl !== '') {
+        $links[] = ['rel' => $relType, 'url' => $relUrl];
+    }
+}
+
+if (!empty($attachments)) {
+    hr();
+    echo "Attachments:\n";
+    if (!is_dir($attachmentsDir)) {
+        mkdir($attachmentsDir, 0755, true);
+    }
+    foreach ($attachments as $attachment) {
+        $filename = $attachment['name'] ?: basename($attachment['url']);
+        $dest = $attachmentsDir . '/' . $filename;
+        echo "  Downloading: $filename\n";
+        $size = adoDownload($attachment['url'], $authHeader, $dest);
+        echo "  Saved to: $dest ($size bytes)\n";
+    }
+    echo "\n";
+}
+
+if (!empty($links)) {
+    hr();
+    echo "Linked Items:\n";
+    foreach ($links as $link) {
+        $linkId = basename(parse_url($link['url'], PHP_URL_PATH));
+        $linkTitle = '';
+        [$lHttpCode, $lResponse] = adoGet($link['url'] . '?api-version=7.1', $authHeader);
+        if ($lHttpCode === 200) {
+            $linkData = json_decode($lResponse, true);
+            $linkTitle = $linkData['fields']['System.Title'] ?? '';
+        }
+        echo "  [{$link['rel']}] #$linkId - $linkTitle\n";
+    }
+    echo "\n";
+}
+
+hr();
+echo "Done.\n";
