@@ -12,7 +12,6 @@ $options = getopt('', [
     'token:'
 ]);
 
-$format = $options['format'] ?? 'table';
 $org = $options['org'] ?? null;
 $project = $options['project'] ?? null;
 $id = $options['id'] ?? null;
@@ -37,6 +36,18 @@ if ($urlArg) {
         exit(1);
     }
 }
+
+// getopt() stops at the first non-option arg (e.g. a positional URL), so
+// re-scan argv for options that may have been missed.
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--format=(.+)$/', $arg, $m)) {
+        $options['format'] = $options['format'] ?? $m[1];
+    } elseif (preg_match('/^--token=(.+)$/', $arg, $m)) {
+        $options['token'] = $options['token'] ?? $m[1];
+    }
+}
+
+$format = $options['format'] ?? 'table';
 
 // Token resolution: --token > ADO_PAT_WORK_ITEMS_READ
 $token = $options['token'] ?? getenv('ADO_PAT_WORK_ITEMS_READ') ?: null;
