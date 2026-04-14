@@ -3,28 +3,23 @@
 
 # Documentation: https://docs.github.com/en/rest/repos/repos#get-a-repository
 
-$options = getopt('', [
-    'url:',
-    'repo:',
-    'owner:',
-    'format:',
-    'token:'
-]);
+// Parse argv manually so named flags work regardless of arg position
+$options = [];
+$positionalUrlArg = null;
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+        $options[$m[1]] = $m[2];
+    } elseif (strncmp($arg, 'https://github.com/', 19) === 0 && $positionalUrlArg === null) {
+        $positionalUrlArg = $arg;
+    }
+}
 
-$format = $options['format'] ?? 'table';
+$format = $options['format'] ?? 'json';
 $repo = $options['repo'] ?? null;
 $owner = $options['owner'] ?? null;
 
 // Accept URL as positional arg or --url option
-$urlArg = $options['url'] ?? null;
-if (!$urlArg) {
-    foreach (array_slice($argv, 1) as $arg) {
-        if (strncmp($arg, 'https://github.com/', 19) === 0) {
-            $urlArg = $arg;
-            break;
-        }
-    }
-}
+$urlArg = $options['url'] ?? $positionalUrlArg;
 if ($urlArg) {
     // https://github.com/OWNER/REPO
     if (preg_match('!github\.com/([^/]+)/([^/?#]+)!', $urlArg, $m)) {
@@ -59,7 +54,8 @@ if (empty($repo) || empty($owner)) {
     echo "Usage: {$argv[0]} https://github.com/OWNER/REPO\n";
     echo "   or: {$argv[0]} --owner=OWNER --repo=REPO\n";
     echo "Optional:\n";
-    echo "  --format=FORMAT         Output format: json, table (default: table)\n";
+    echo "  --format=FORMAT         Output format: json, table (default: json)\n";
+    echo "  --token=TOKEN           GitHub token (overrides env vars)\n";
     echo "Example: {$argv[0]} https://github.com/anthropics/claude-code\n";
     exit(1);
 }

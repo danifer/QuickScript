@@ -3,51 +3,35 @@
 
 # Documentation: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/get-work-item
 
-$options = getopt('', [
-    'url:',
-    'org:',
-    'project:',
-    'id:',
-    'format:',
-    'token:'
-]);
+// Parse argv manually so named flags work regardless of arg position
+$options = [];
+$positionalUrlArg = null;
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+        $options[$m[1]] = $m[2];
+    } elseif (strncmp($arg, 'https://dev.azure.com/', 22) === 0 && $positionalUrlArg === null) {
+        $positionalUrlArg = $arg;
+    }
+}
 
 $org = $options['org'] ?? null;
 $project = $options['project'] ?? null;
 $id = $options['id'] ?? null;
 
 // Accept URL as positional arg or --url option
-$urlArg = $options['url'] ?? null;
-if (!$urlArg) {
-    foreach (array_slice($argv, 1) as $arg) {
-        if (strncmp($arg, 'https://dev.azure.com/', 22) === 0) {
-            $urlArg = $arg;
-            break;
-        }
-    }
-}
+$urlArg = $options['url'] ?? $positionalUrlArg;
 if ($urlArg) {
     if (preg_match('!dev\.azure\.com/([^/]+)/([^/]+)/_workitems/edit/(\d+)!', $urlArg, $m)) {
-        $org = $org ?? $m[1];
+        $org     = $org     ?? $m[1];
         $project = $project ?? $m[2];
-        $id = $id ?? $m[3];
+        $id      = $id      ?? $m[3];
     } else {
         echo "Could not parse Azure DevOps URL. Expected: https://dev.azure.com/ORG/PROJECT/_workitems/edit/ID\n";
         exit(1);
     }
 }
 
-// getopt() stops at the first non-option arg (e.g. a positional URL), so
-// re-scan argv for options that may have been missed.
-foreach (array_slice($argv, 1) as $arg) {
-    if (preg_match('/^--format=(.+)$/', $arg, $m)) {
-        $options['format'] = $options['format'] ?? $m[1];
-    } elseif (preg_match('/^--token=(.+)$/', $arg, $m)) {
-        $options['token'] = $options['token'] ?? $m[1];
-    }
-}
-
-$format = $options['format'] ?? 'table';
+$format = $options['format'] ?? 'json';
 
 // Token resolution: --token > ADO_PAT_WORK_ITEMS_READ
 $token = $options['token'] ?? getenv('ADO_PAT_WORK_ITEMS_READ') ?: null;
@@ -63,7 +47,7 @@ if (empty($org) || empty($project) || empty($id)) {
     echo "Usage: {$argv[0]} https://dev.azure.com/ORG/PROJECT/_workitems/edit/ID\n";
     echo "   or: {$argv[0]} --org=ORG --project=PROJECT --id=ID\n";
     echo "Optional:\n";
-    echo "  --format=FORMAT   Output format: json, table (default: table)\n";
+    echo "  --format=FORMAT   Output format: json, table (default: json)\n";
     echo "  --token=TOKEN     PAT (overrides ADO_PAT_WORK_ITEMS_READ)\n";
     exit(1);
 }

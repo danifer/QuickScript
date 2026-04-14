@@ -6,17 +6,18 @@
 #   https://docs.github.com/en/rest/pulls/reviews#get-a-review-for-a-pull-request
 #   https://docs.github.com/en/rest/issues/comments#get-an-issue-comment
 
-$options = getopt('', [
-    'url:',
-    'owner:',
-    'repo:',
-    'pr:',
-    'comment:',
-    'format:',
-    'token:'
-]);
+// Parse argv manually so named flags work regardless of arg position
+$options = [];
+$positionalUrlArg = null;
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+        $options[$m[1]] = $m[2];
+    } elseif (strncmp($arg, 'https://github.com/', 19) === 0 && $positionalUrlArg === null) {
+        $positionalUrlArg = $arg;
+    }
+}
 
-$format = $options['format'] ?? 'table';
+$format = $options['format'] ?? 'json';
 $allowedFormats = ['json', 'table'];
 
 if (!in_array($format, $allowedFormats)) {
@@ -31,15 +32,7 @@ $prNumber = $options['pr'] ?? null;
 $commentId = $options['comment'] ?? null;
 $commentType = 'review_comment'; // default
 
-$urlArg = $options['url'] ?? null;
-if (!$urlArg) {
-    foreach (array_slice($argv, 1) as $arg) {
-        if (strncmp($arg, 'https://github.com/', 19) === 0) {
-            $urlArg = $arg;
-            break;
-        }
-    }
-}
+$urlArg = $options['url'] ?? $positionalUrlArg;
 
 if (!empty($urlArg)) {
     $url = $urlArg;
@@ -85,12 +78,12 @@ if (empty($owner) || empty($repo) || empty($commentId)) {
     echo "  https://github.com/OWNER/REPO/pull/NUMBER#issuecomment-ID\n";
     echo "  https://github.com/OWNER/REPO/commit/SHA#commitcomment-ID\n";
     echo "Optional:\n";
-    echo "  --format=FORMAT         Output format: json, table (default: table)\n";
+    echo "  --format=FORMAT         Output format: json, table (default: json)\n";
     echo "  --token=TOKEN           GitHub token (overrides env vars)\n";
     exit(1);
 }
 
-// Resolve token: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
+// Token resolution: --token > {OWNER}_GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_PERSONAL_ACCESS_TOKEN > GITHUB_TOKEN
 $ownerEnvKey = strtoupper($owner) . '_GITHUB_PERSONAL_ACCESS_TOKEN';
 $token = $options['token']
     ?? getenv($ownerEnvKey)
@@ -98,7 +91,7 @@ $token = $options['token']
     ?: getenv('GITHUB_TOKEN');
 
 if (empty($token)) {
-    echo "No token supplied. Set {$ownerEnvKey}, GITHUB_PERSONAL_ACCESS_TOKEN, or GITHUB_TOKEN, or use --token.\n";
+    echo "No token supplied. Set GITHUB_TOKEN, GITHUB_PERSONAL_ACCESS_TOKEN, or use --token.\n";
     exit(1);
 }
 

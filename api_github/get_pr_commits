@@ -3,30 +3,24 @@
 
 # Documentation: https://docs.github.com/en/rest/pulls/pulls#list-commits-on-a-pull-request
 
-$options = getopt('', [
-    'url:',
-    'repo:',
-    'owner:',
-    'pr:',
-    'format:',
-    'token:'
-]);
+// Parse argv manually so named flags work regardless of arg position
+$options = [];
+$positionalUrlArg = null;
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+        $options[$m[1]] = $m[2];
+    } elseif (strncmp($arg, 'https://github.com/', 19) === 0 && $positionalUrlArg === null) {
+        $positionalUrlArg = $arg;
+    }
+}
 
-$format = $options['format'] ?? 'table';
+$format = $options['format'] ?? 'json';
 $repo = $options['repo'] ?? null;
 $owner = $options['owner'] ?? null;
 $prNumber = $options['pr'] ?? null;
 
 // Accept URL as positional arg or --url option
-$urlArg = $options['url'] ?? null;
-if (!$urlArg) {
-    foreach (array_slice($argv, 1) as $arg) {
-        if (strncmp($arg, 'https://github.com/', 19) === 0) {
-            $urlArg = $arg;
-            break;
-        }
-    }
-}
+$urlArg = $options['url'] ?? $positionalUrlArg;
 if ($urlArg) {
     // https://github.com/OWNER/REPO/pull/NUMBER
     if (preg_match('!github\.com/([^/]+)/([^/]+)/pull/(\d+)!', $urlArg, $m)) {
@@ -62,7 +56,8 @@ if (empty($repo) || empty($owner) || empty($prNumber)) {
     echo "Usage: {$argv[0]} https://github.com/OWNER/REPO/pull/NUMBER\n";
     echo "   or: {$argv[0]} --owner=OWNER --repo=REPO --pr=PR_NUMBER\n";
     echo "Optional:\n";
-    echo "  --format=FORMAT         Output format: json, csv, table (default: table)\n";
+    echo "  --format=FORMAT         Output format: json, csv, table (default: json)\n";
+    echo "  --token=TOKEN           GitHub token (overrides env vars)\n";
     echo "Example: {$argv[0]} https://github.com/anthropics/claude-code/pull/123\n";
     exit(1);
 }

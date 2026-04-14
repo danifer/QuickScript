@@ -3,32 +3,25 @@
 
 # Documentation: https://docs.github.com/en/rest/repos/repos#list-repositories-for-a-user
 
-$options = getopt('', [
-    'url:',
-    'owner:',
-    'type:',
-    'sort:',
-    'limit:',
-    'format:',
-    'token:'
-]);
+// Parse argv manually so named flags work regardless of arg position
+$options = [];
+$positionalUrlArg = null;
+foreach (array_slice($argv, 1) as $arg) {
+    if (preg_match('/^--([^=]+)=(.*)$/', $arg, $m)) {
+        $options[$m[1]] = $m[2];
+    } elseif (strncmp($arg, 'https://github.com/', 19) === 0 && $positionalUrlArg === null) {
+        $positionalUrlArg = $arg;
+    }
+}
 
-$format = $options['format'] ?? 'table';
+$format = $options['format'] ?? 'json';
 $owner = $options['owner'] ?? null;
 $type = $options['type'] ?? 'all';
 $sort = $options['sort'] ?? 'updated';
 $limit = $options['limit'] ?? 100;
 
 // Accept URL as positional arg or --url option
-$urlArg = $options['url'] ?? null;
-if (!$urlArg) {
-    foreach (array_slice($argv, 1) as $arg) {
-        if (strncmp($arg, 'https://github.com/', 19) === 0) {
-            $urlArg = $arg;
-            break;
-        }
-    }
-}
+$urlArg = $options['url'] ?? $positionalUrlArg;
 if ($urlArg) {
     // https://github.com/OWNER
     if (preg_match('!github\.com/([^/?#]+)!', $urlArg, $m)) {
@@ -77,7 +70,8 @@ if (empty($owner)) {
     echo "  --type=TYPE             Type: all, owner, member (default: all)\n";
     echo "  --sort=SORT             Sort by: created, updated, pushed, full_name (default: updated)\n";
     echo "  --limit=N               Number of repos to fetch (default: 100)\n";
-    echo "  --format=FORMAT         Output format: json, csv, table (default: table)\n";
+    echo "  --format=FORMAT         Output format: json, csv, table (default: json)\n";
+    echo "  --token=TOKEN           GitHub token (overrides env vars)\n";
     echo "Example: {$argv[0]} https://github.com/anthropics --limit=20\n";
     exit(1);
 }
@@ -92,10 +86,9 @@ $queryParams = [
 
 $queryString = http_build_query($queryParams);
 
-// Try as user first, then as org
-$url = "https://api.github.com/users/{$owner}/repos?{$queryString}";
+// Try as org first, then as user
+$url = "https://api.github.com/orgs/{$owner}/repos?{$queryString}";
 
-// Initialize cURL session
 $ch = curl_init();
 curl_setopt($ch, CURLOPT_URL, $url);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -117,9 +110,9 @@ if (curl_errno($ch)) {
 
 curl_close($ch);
 
-// If not found as user, try as organization
+// If not found as org, try as user
 if ($httpCode === 404) {
-    $url = "https://api.github.com/orgs/{$owner}/repos?{$queryString}";
+    $url = "https://api.github.com/users/{$owner}/repos?{$queryString}";
 
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_URL, $url);
