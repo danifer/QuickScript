@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# move_claude_directory - Move a Claude project directory and update all ~/.claude references.
+#
+# Usage: move_claude_directory <source-directory> <target-directory>
+#
+# Example:
+#   move_claude_directory '/path/to/source/MyProject' \
+#                         '/path/to/destination/MyProject'
+
+set -euo pipefail
+
+CLAUDE_DIR="$HOME/.claude"
+
+usage() {
+    cat >&2 <<EOF
+Usage: $(basename "$0") <source-directory> <target-directory>
+
+Moves source-directory to target-directory and updates all Claude history
+and metadata references in ~/.claude.
+
+Example:
+  $(basename "$0") '/path/to/source/MyProject' \\
+                   '/path/to/destination/MyProject'
+EOF
+    exit 1
+}
+
+# Encode an absolute filesystem path to Claude's projects/ directory naming.
+# Claude encodes paths by replacing every '/' with '-'.
+encode_path() {
+    local path="$1"
+    path="${path%/}"
+    echo "${path//\//-}"
+}
+
+# Search projects/ for a directory whose name matches the encoded path.
+# Falls back to a glob search in case dot-segments encoded differently.
+find_project_dir() {
+    local encoded="$1"
+    local dir="$CLAUDE_DIR/projects/$encoded"
+    if [[ -d "$dir" ]]; then
+        echo "$dir"
+        return 0
+    fi
+    return 1
+}
+
+[[ $# -eq 2 ]] || usage
+
+SRC="${1%/}"
+TGT="${2%/}"
+
+# -- Preflight checks --------------------------------------------------------
+
+if [[ ! -d "$SRC" ]]; then
+    echo "Error: source directory does not exist: $SRC" >&2
+    exit 1
+fi
+
+TGT_PARENT="$(dirname "$TGT")"
+if [[ ! -d "$TGT_PARENT" ]]; then
+    echo "Error: target parent directory does not exist: $TGT_PARENT" >&2
+    exit 1
+fi
+
+if [[ -e "$TGT" ]]; then
+    echo "Error: target already exists: $TGT" >&2
+    exit 1
+fi
+
+SRC_ENCODED="$(encode_path "$SRC")"
+TGT_ENCODED="$(encode_path "$TGT")"
+
+PROJECTS_DIR="$CLAUDE_DIR/projects"
+SRC_PROJECT_DIR="$PROJECTS_DIR/$SRC_ENCODED"
+TGT_PROJECT_DIR="$PROJECTS_DIR/$TGT_ENCODED"
+
+echo "Moving project:"
+echo "  Source : $SRC"
+echo "  Target : $TGT"
+echo ""
+
+# -- Step 1: Move the project directory --------------------------------------
+
+echo "[1/4] Moving project directory..."
+mv "$SRC" "$TGT"
+echo "      Done."
+echo ""
+
+# -- Step 2: Rename the Claude projects metadata directory -------------------
+
+echo "[2/4] Updating Claude projects metadata directory..."
+if [[ -d "$SRC_PROJECT_DIR" ]]; then
+    mv "$SRC_PROJECT_DIR" "$TGT_PROJECT_DIR"
+    echo "      Renamed: $SRC_ENCODED"
+    echo "           to: $TGT_ENCODED"
+else
+    echo "      No metadata directory found at: $SRC_ENCODED"
+    echo "      (skipped)"
+fi
+echo ""
+
+# -- Step 3: Update sessions-index.json and JSONL files ----------------------
+
+echo "[3/4] Updating session files in metadata directory..."
+if [[ -d "$TGT_PROJECT_DIR" ]]; then
+    updated=0
+    while IFS= read -r -d '' f; do
+        if grep -qF "$SRC" "$f" 2>/dev/null; then
+            perl -pi -e "s|\Q${SRC}\E|${TGT}|g" "$f"
+            echo "      Updated: ${f#$CLAUDE_DIR/}"
+            (( updated++ )) || true
+        fi
+    done < <(find "$TGT_PROJECT_DIR" \( -name "*.jsonl" -o -name "sessions-index.json" \) -print0)
+    if [[ $updated -eq 0 ]]; then
+        echo "      No references found."
+    fi
+else
+    echo "      No metadata directory - skipped."
+fi
+echo ""
+
+# -- Step 4: Update root history.jsonl ---------------------------------------
+
+echo "[4/4] Updating ~/.claude/history.jsonl..."
+HISTORY_FILE="$CLAUDE_DIR/history.jsonl"
+if [[ -f "$HISTORY_FILE" ]]; then
+    if grep -qF "$SRC" "$HISTORY_FILE" 2>/dev/null; then
+        perl -pi -e "s|\Q${SRC}\E|${TGT}|g" "$HISTORY_FILE"
+        echo "      Updated."
+    else
+        echo "      No references found."
+    fi
+else
+    echo "      history.jsonl not found - skipped."
+fi
+echo ""
+
+echo "Move complete."
+echo "  $SRC"
+echo "  -> $TGT"
